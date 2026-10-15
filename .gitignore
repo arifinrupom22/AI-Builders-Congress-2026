@@ -1,0 +1,30 @@
+# --- Secrets: NEVER commit these ---
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# --- Runtime data (uploaded materials, extracted text, JSON store) ---
+server/data/
+!server/data/.gitkeep
+
+# --- Build output ---
+web/dist/
+dist/
+build/
+node_modules/
+
+# --- Logs & OS noise ---
+*.log
+npm-debug.log*
+server/logs/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Editor ---
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
