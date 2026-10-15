@@ -171,21 +171,37 @@ Netlify UI does not deploy functions. See Netlify's [Express/functions deploymen
 
 Deploy the backend using the included `render.yaml` Blueprint. It runs the
 existing Express server and mounts a persistent disk at `/var/data` for
-materials, sessions, quizzes, and uploaded files. After deploying, copy your
-Netlify site URL and set `CORS_ALLOWED_ORIGINS` on Render to that exact origin
-(for example, `https://your-site.netlify.app`). Then copy the Render service's
-base URL and add these environment variables in Netlify's site settings:
+materials, sessions, quizzes, and uploaded files. Copy your Netlify site URL and
+set `CORS_ALLOWED_ORIGINS` on Render to that exact origin (for example,
+`https://your-site.netlify.app`). That grant only matters if a browser calls the
+API directly; the same-origin proxy below does not need it.
+
+The Netlify Function ships with this project's own deployed API as its default
+backend, so a deployment of this repository works with **no environment
+variables at all**. To point the site at a different API - a fork, a staging
+service, or a host you moved to - set one variable in Netlify under
+**Project configuration → Environment variables**:
 
 ```
-VITE_API_BASE_URL=https://your-backend.onrender.com
-LEARNSPHERE_BACKEND_URL=https://your-backend.onrender.com
+LEARNSPHERE_BACKEND_URL=https://your-backend.onrender.com   # scope: Functions
 ```
 
-Redeploy the Netlify site after setting these variables. The browser then calls
-the existing API directly, preserving the configured upload-size limit; the
-Netlify Function also provides a same-origin API proxy fallback. The Render
-disk requires a paid web-service plan; without persistent storage, uploaded
-study materials would be lost when the backend restarts. See Render's [persistent disk documentation](https://render.com/docs/disks).
+The scope must include **Functions**, and the site has to be deployed again:
+Netlify binds a function's environment variables at deploy time, so changing the
+value alone leaves the running function on the old one. Setting
+`VITE_API_BASE_URL` is optional - leave it unset so the browser calls `/api` on
+its own origin and the function forwards it. A relative base URL needs no CORS
+grant and cannot break when the backend host changes.
+
+`netlify.toml` also excludes the two builder settings `NODE_ENV` and `PORT` from
+Netlify's build secrets scanner (`SECRETS_SCAN_OMIT_KEYS`). Neither is a
+credential; both words occur in the published bundle, which is why the scanner
+flagged them. Real secrets are still scanned and would still fail the build.
+
+The Render disk requires a paid web-service plan; without persistent storage,
+uploaded study materials would be lost when the backend restarts, and the free
+plan also sleeps when idle, so the first request of the day can take up to a
+minute (the app retries instead of showing an error). See Render's [persistent disk documentation](https://render.com/docs/disks).
 
 For local preview, run `npm run dev`. For a standalone production server, run
 `npm run build` followed by `npm run start`.

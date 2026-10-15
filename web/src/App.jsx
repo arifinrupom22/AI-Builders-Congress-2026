@@ -5,7 +5,7 @@
  * A single error boundary sits around everything so a render failure shows a
  * readable message instead of a blank page.
  */
-import { Component, useEffect } from 'react';
+import { Component, useCallback, useEffect, useState } from 'react';
 import { AppProvider, useApp } from './store/AppContext.jsx';
 import { useRoute } from './lib/router.jsx';
 import { AppShell } from './components/AppShell.jsx';
@@ -69,10 +69,26 @@ class ErrorBoundary extends Component {
   }
 }
 
+const CONFIG_ERROR_CODES = ['backend_not_configured', 'invalid_backend_url'];
+// Codes only an API proxy produces. Seeing one means a hosted deployment is in
+// the path, even on localhost (Netlify Dev, or the proxy run by hand).
+const PROXY_ERROR_CODES = [...CONFIG_ERROR_CODES, 'backend_timeout', 'backend_unavailable'];
+
 function Runtime() {
   const route = useRoute();
-  const { bootState, bootError } = useApp();
+  const { bootState, bootError, bootAttempt, bootRetryLimit, reload } = useApp();
+  const [retrying, setRetrying] = useState(false);
   const Page = resolveRoute(route);
+
+  // Retry in place: nothing the student already has in this browser is cleared.
+  const retry = useCallback(async () => {
+    setRetrying(true);
+    try {
+      await reload();
+    } finally {
+      setRetrying(false);
+    }
+  }, [reload]);
 
   // Each route starts at the top of the page.
   useEffect(() => {
@@ -88,7 +104,11 @@ function Runtime() {
             <Icon name="compass" size={26} />
           </span>
           <h1 className="boot__title">LearnSphere AI</h1>
-          <p className="boot__text">Connecting to your local study server…</p>
+          <p className="boot__text">
+            {bootAttempt > 0
+              ? `Waking up the hosted API — a free-tier server sleeps when idle. Attempt ${bootAttempt + 1} of ${bootRetryLimit + 1}…`
+              : 'Connecting to your study server…'}
+          </p>
           <LoadingPanel label="Loading configuration" rows={2} />
         </div>
       </div>
@@ -96,38 +116,33 @@ function Runtime() {
   }
 
   if (bootState === 'offline') {
-    const isHostedDeployment =
-      !['localhost', '127.0.0.1', '::1'].includes(window.location.hostname) ||
-      ['backend_not_configured', 'backend_unavailable', 'invalid_backend_url'].includes(bootError?.code);
+    const isLoopback = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+    const isConfigProblem = CONFIG_ERROR_CODES.includes(bootError?.code);
+    // Loopback means this is a dev machine, where the fix is to start Express —
+    // unless the failure came from a proxy, which only exists in a deployment.
+    const hosted = !isLoopback || PROXY_ERROR_CODES.includes(bootError?.code);
+    const title = !hosted
+      ? 'The study server is not running'
+      : isConfigProblem
+        ? 'Connect the LearnSphere API'
+        : 'The LearnSphere API is not answering yet';
+
     return (
       <div className="boot">
         <div className="boot__card">
           <span className="boot__mark boot__mark--warn">
             <Icon name="alert" size={26} />
           </span>
-          <h1 className="boot__title">
-            {isHostedDeployment ? 'Connect the LearnSphere API' : 'The study server is not running'}
-          </h1>
+          <h1 className="boot__title">{title}</h1>
           <p className="boot__text">
-            {isHostedDeployment
-              ? 'Netlify publishes the web app separately from its Express backend. Connect a deployed LearnSphere API to enable uploads, retrieval and progress.'
-              : 'LearnSphere AI needs its local Express backend for retrieval, uploads and progress.'}
+            {!hosted
+              ? 'LearnSphere AI needs its local Express backend for retrieval, uploads and progress.'
+              : isConfigProblem
+                ? 'The web app is published, but its API function has no usable backend address.'
+                : 'The request reached the API but it did not answer. A free-tier server can sleep when idle and needs a moment to start.'}
           </p>
-          <Alert tone="warning" title={isHostedDeployment ? 'Finish the API deployment' : 'Start the backend, then reload'}>
-            {isHostedDeployment ? (
-              <>
-                <p>
-                  Deploy the backend from <code className="md-code">render.yaml</code>. Set{' '}
-                  <code className="md-code">CORS_ALLOWED_ORIGINS</code> on the backend to this site's URL.
-                  In Netlify, set <code className="md-code">VITE_API_BASE_URL</code> and{' '}
-                  <code className="md-code">LEARNSPHERE_BACKEND_URL</code> to the backend URL, then redeploy.
-                </p>
-                <p className="muted-xs">Deploy from the repository or Netlify CLI so the API function is included; uploading only the static folder omits server-side functions.</p>
-                {bootError?.code && !['http_error', 'backend_not_configured'].includes(bootError.code) ? (
-                  <p className="muted-xs">{bootError.message}</p>
-                ) : null}
-              </>
-            ) : (
+          <Alert tone="warning" title={hosted ? (isConfigProblem ? 'Finish the API deployment' : 'Try again') : 'Start the backend, then reload'}>
+            {!hosted ? (
               <>
                 <p>
                   From the project folder run <code className="md-code">npm run dev</code>, which starts the
@@ -135,11 +150,40 @@ function Runtime() {
                 </p>
                 {bootError?.message ? <p className="muted-xs">{bootError.message}</p> : null}
               </>
+            ) : isConfigProblem ? (
+              <>
+                <p>
+                  Deploy the backend from <code className="md-code">render.yaml</code>, then in Netlify open{' '}
+                  <strong>Project configuration → Environment variables</strong> and set{' '}
+                  <code className="md-code">LEARNSPHERE_BACKEND_URL</code> to the backend URL. Its scope must
+                  include <strong>Functions</strong>, and a new deploy is needed for the change to apply.
+                </p>
+                <p className="muted-xs">
+                  The API function ships with this project's own backend as its default, so this message
+                  normally means the whole function was not deployed. Deploy from the repository or the
+                  Netlify CLI; uploading only the built static folder omits server-side functions.
+                </p>
+                {bootError?.message ? <p className="muted-xs">{bootError.message}</p> : null}
+              </>
+            ) : (
+              <>
+                <p>
+                  Retrying here keeps your library, profile and drafts. If it stays down, the{' '}
+                  <code className="md-code">/api/health</code> endpoint of the backend service can be checked
+                  on its own.
+                </p>
+                {bootError?.message ? <p className="muted-xs">{bootError.message}</p> : null}
+              </>
             )}
           </Alert>
-          <Button icon="refresh" onClick={() => window.location.reload()}>
-            Reload
-          </Button>
+          <div className="boot__actions">
+            <Button icon="refresh" loading={retrying} onClick={retry}>
+              {retrying ? 'Trying again…' : 'Try again'}
+            </Button>
+            <Button variant="ghost" icon="external" onClick={() => window.location.reload()}>
+              Reload the page
+            </Button>
+          </div>
         </div>
       </div>
     );

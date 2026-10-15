@@ -82,8 +82,11 @@ export default function SettingsPage() {
     setBusy(true);
     setError(null);
     try {
-      reload();
-      notify('Configuration reloaded.', 'success');
+      // Report what actually happened: a reload that could not reach the API
+      // used to announce success and leave the stale values on screen.
+      const status = await reload();
+      if (status === 'ready') notify('Configuration reloaded.', 'success');
+      else if (status === 'offline') notify('The API is still unreachable. Try again in a moment.', 'error');
     } catch (err) {
       setError(err);
     } finally {

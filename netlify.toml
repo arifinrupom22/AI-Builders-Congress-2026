@@ -2,6 +2,15 @@
   command = "npm run build"
   publish = "web/dist"
 
+[build.environment]
+  # Netlify's build secrets scanner reported NODE_ENV and PORT, which are
+  # ordinary builder settings rather than credentials: both words also appear in
+  # the published bundle ("production", the default port), so the finding is a
+  # false positive. Excluding just these two keys keeps the scanner enabled for
+  # everything that could be a real secret - an API key would still fail the
+  # build. See docs.netlify.com/build/environment-variables/secrets-controller
+  SECRETS_SCAN_OMIT_KEYS = "NODE_ENV,PORT"
+
 [functions]
   directory = "netlify/functions"
   node_bundler = "esbuild"
