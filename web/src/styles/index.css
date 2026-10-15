@@ -3061,6 +3061,15 @@ select.ls-input {
   margin-bottom: var(--s5);
 }
 
+/* Retry in place, or reload the whole page - both stay within reach on mobile. */
+.boot__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s3);
+  justify-content: center;
+  margin-top: var(--s4);
+}
+
 .boot__card .ls-loading {
   text-align: left;
 }

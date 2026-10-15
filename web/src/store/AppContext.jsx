@@ -13,6 +13,33 @@ const AppContext = createContext(null);
 
 let toastSeq = 0;
 
+/**
+ * A hosted API on a free plan sleeps when idle and can take the better part of a
+ * minute to answer its first request again. Treating that first timeout as a
+ * dead end would make the whole app look broken on the first visit of the day,
+ * so a retryable failure is retried a few times before the UI gives up.
+ */
+const BOOT_RETRY_DELAYS_MS = [1500, 3000, 6000, 9000];
+export const BOOT_RETRY_LIMIT = BOOT_RETRY_DELAYS_MS.length;
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * A misconfiguration will not fix itself, so only transport-level failures are
+ * worth retrying: a dead network, a server that is still starting, or a rate
+ * limit that expires by itself.
+ */
+function isRetryableBootError(err) {
+  if (!err) return false;
+  if (err.code === 'backend_not_configured' || err.code === 'invalid_backend_url') return false;
+  if (err.code === 'network_error') return true;
+  return [502, 503, 504, 429].includes(err.status);
+}
+
 export function AppProvider({ children }) {
   const [learnerId, setLearnerIdState] = useState(() => getLearnerId());
 
@@ -23,6 +50,8 @@ export function AppProvider({ children }) {
 
   const [bootState, setBootState] = useState('loading'); // loading | ready | offline
   const [bootError, setBootError] = useState(null);
+  const [bootAttempt, setBootAttempt] = useState(0);
+  const bootController = useRef(null);
   const [materialsState, setMaterialsState] = useState('loading'); // loading | ready | error
 
   const [toasts, setToasts] = useState([]);
@@ -90,29 +119,50 @@ export function AppProvider({ children }) {
     }
   }, [loadMaterials, notify]);
 
+  /**
+   * Load the server configuration, retrying a retryable failure with backoff.
+   * Returns the state it settled on so a manual retry can report the outcome.
+   */
+  const boot = useCallback(
+    async (signal) => {
+      setBootState('loading');
+      setBootError(null);
+      setBootAttempt(0);
+
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          await loadConfig(signal);
+          if (signal?.aborted) return 'aborted';
+          setBootState('ready');
+          return 'ready';
+        } catch (err) {
+          if (signal?.aborted) return 'aborted';
+          const retryable = isRetryableBootError(err);
+          if (!retryable || attempt >= BOOT_RETRY_DELAYS_MS.length) {
+            setBootError(err);
+            setBootState('offline');
+            return 'offline';
+          }
+          setBootAttempt(attempt + 1);
+          await sleep(BOOT_RETRY_DELAYS_MS[attempt]);
+          if (signal?.aborted) return 'aborted';
+        }
+      }
+    },
+    [loadConfig],
+  );
+
   // Boot (and re-boot when the study profile changes).
   useEffect(() => {
     const controller = new AbortController();
-    setBootState('loading');
-    setBootError(null);
-
-    loadConfig(controller.signal)
-      .then(() => {
-        if (controller.signal.aborted) return;
-        setBootState('ready');
-      })
-      .catch((err) => {
-        if (controller.signal.aborted) return;
-        setBootError(err);
-        setBootState('offline');
-      });
+    boot(controller.signal);
 
     loadMaterials(controller.signal).catch(() => {
       /* surfaced through materialsState instead */
     });
 
     return () => controller.abort();
-  }, [learnerId, loadConfig, loadMaterials]);
+  }, [learnerId, boot, loadMaterials]);
 
   const setProfile = useCallback(
     (raw) => {
@@ -138,11 +188,18 @@ export function AppProvider({ children }) {
       refreshMaterials,
       bootState,
       bootError,
+      bootAttempt,
+      bootRetryLimit: BOOT_RETRY_LIMIT,
+      /**
+       * Try again without throwing away anything already in the browser: the
+       * library, the study profile and any typed question all survive.
+       */
       reload: () => {
+        bootController.current?.abort();
         const controller = new AbortController();
-        loadConfig(controller.signal).catch((err) => {
-          setBootError(err);
-          setBootState('offline');
+        bootController.current = controller;
+        return boot(controller.signal).finally(() => {
+          if (bootController.current === controller) bootController.current = null;
         });
       },
       toasts,
@@ -160,10 +217,11 @@ export function AppProvider({ children }) {
       refreshMaterials,
       bootState,
       bootError,
+      bootAttempt,
+      boot,
       toasts,
       notify,
       dismissToast,
-      loadConfig,
     ],
   );
 
