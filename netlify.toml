@@ -3,13 +3,21 @@
   publish = "web/dist"
 
 [build.environment]
-  # Netlify's build secrets scanner reported NODE_ENV and PORT, which are
-  # ordinary builder settings rather than credentials: both words also appear in
-  # the published bundle ("production", the default port), so the finding is a
-  # false positive. Excluding just these two keys keeps the scanner enabled for
-  # everything that could be a real secret - an API key would still fail the
-  # build. See docs.netlify.com/build/environment-variables/secrets-controller
-  SECRETS_SCAN_OMIT_KEYS = "NODE_ENV,PORT"
+  # Netlify's secrets scanner fails the build when the *value* of a variable
+  # marked "Contains secret values" is found anywhere in the repo or the build
+  # output. Every key below is ordinary configuration, not a credential, and
+  # their values legitimately occur in source and in the published bundle:
+  #   NODE_ENV=production, PORT=10000/8787   - platform/build settings
+  #   RETRIEVAL_MIN_SCORE=0.35               - a relevance threshold
+  #   AI_TIMEOUT_MS=45000                    - a timeout in milliseconds
+  #   LEARNSPHERE_AI_PROVIDER=groq           - the provider's name
+  #   LEARNSPHERE_AI_MODEL=openai/gpt-oss-20b - the model's name
+  # Omitting exactly these keys keeps scanning enabled for everything that could
+  # be a real secret: LEARNSPHERE_AI_API_KEY is still scanned and would still
+  # fail the build if it ever appeared in the output. Marking a key here does not
+  # disable the scanner, it only stops these known-benign values from matching.
+  # See docs.netlify.com/build/environment-variables/secrets-controller
+  SECRETS_SCAN_OMIT_KEYS = "NODE_ENV,PORT,RETRIEVAL_MIN_SCORE,AI_TIMEOUT_MS,LEARNSPHERE_AI_PROVIDER,LEARNSPHERE_AI_MODEL"
 
 [functions]
   directory = "netlify/functions"
