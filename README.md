@@ -193,10 +193,51 @@ value alone leaves the running function on the old one. Setting
 its own origin and the function forwards it. A relative base URL needs no CORS
 grant and cannot break when the backend host changes.
 
-`netlify.toml` also excludes the two builder settings `NODE_ENV` and `PORT` from
-Netlify's build secrets scanner (`SECRETS_SCAN_OMIT_KEYS`). Neither is a
-credential; both words occur in the published bundle, which is why the scanner
-flagged them. Real secrets are still scanned and would still fail the build.
+`netlify.toml` also excludes six non-credential settings from Netlify's build
+secrets scanner (`SECRETS_SCAN_OMIT_KEYS`): `NODE_ENV`, `PORT`,
+`RETRIEVAL_MIN_SCORE`, `AI_TIMEOUT_MS`, `LEARNSPHERE_AI_PROVIDER` and
+`LEARNSPHERE_AI_MODEL`. Their values legitimately occur in the repository and in
+the published bundle - a threshold, a timeout, a provider name, a model name -
+and a variable marked "Contains secret values" fails the build whenever its
+value is found anywhere in the output. The keys are omitted; the scanner still
+runs, and `LEARNSPHERE_AI_API_KEY` is still scanned and would still fail the
+build if its value ever reached the output. The underlying fix is to unmark
+those variables in Netlify (they are configuration, not credentials); these
+omissions are the belt to that braces.
+
+### Verifying a deployment
+
+Three checks, in this order - each one isolates a different layer:
+
+```
+# 1. The backend itself (Render). Expect 200 and "status":"ok".
+curl -s -o /dev/null -w "%{http_code}\n" https://ai-builders-congress-2026.onrender.com/api/health
+
+# 2. The same route through the Netlify Function proxy. Expect the SAME JSON;
+#    a 502 here with "NetlifyUserError" means the function returned the wrong
+#    type, and 503 "backend_timeout" means the upstream did not answer in 9s
+#    (a sleeping free-tier instance - retry once).
+curl -s https://ai-builders-congress-2026.netlify.app/api/health
+
+# 3. The published bundle. The HTML must reference the current build's hashes;
+#    asset names change on every build, so a stale hash means a stale deploy.
+curl -s https://ai-builders-congress-2026.netlify.app/ | grep -o 'assets/[A-Za-z0-9_.-]*'
+```
+
+The Function's own log lines appear in Netlify under **Deploys → the latest
+deploy → Functions**, or **Logs → Functions**; every message this proxy writes
+starts with `LearnSphere proxy:`.
+
+### Rollback
+
+Both halves are independent, so roll back only the half that is broken.
+
+- **Netlify**: **Deploys** → pick the last deploy that worked → **Publish
+deploy**. That re-publishes the previous static bundle *and* its function,
+without a build.
+- **Render**: open the service → **Deploys** → the last successful deploy →
+**Rollback to this deploy**. The persistent disk is not affected, so uploaded
+materials survive.
 
 The Render disk requires a paid web-service plan; without persistent storage,
 uploaded study materials would be lost when the backend restarts, and the free
