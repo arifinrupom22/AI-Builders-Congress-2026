@@ -6,6 +6,14 @@
  * This function gives `/api/*` a same-origin endpoint that forwards to the real
  * backend, which also means the production app needs no CORS grant at all.
  *
+ * RUNTIME CONTRACT: this module has a default export, so Netlify runs it as a
+ * modern (Functions 2.0) handler. It is invoked with a standard `Request` and
+ * MUST return a standard `Response`. It previously returned the older Lambda
+ * shape `{ statusCode, headers, body }`, and the production function failed with
+ * "NetlifyUserError: Function returned an unsupported value. Accepted types are
+ * 'Response' or 'undefined'" - every `/api/*` call answered 502. Keep the return
+ * type, not just the payload, covered by tests.
+ *
  * Backend selection, in order:
  *   1. `LEARNSPHERE_BACKEND_URL` - the environment variable to set in the
  *      Netlify UI with the *Functions* scope (Project configuration ->
@@ -20,51 +28,83 @@
 const DEFAULT_BACKEND_URL = 'https://ai-builders-congress-2026.onrender.com';
 
 /**
- * Netlify kills a synchronous function after 10 seconds, so the upstream call
- * has to give up first and answer with something the UI can explain. Render's
- * free tier can take ~30s to wake a sleeping instance, which is why the reply is
+ * Netlify stops a synchronous function at 10 seconds, so the upstream call has
+ * to give up first and answer with something the UI can explain. Render's free
+ * tier can take ~30s to wake a sleeping instance, which is why the reply is
  * marked retryable: the client retries a few times instead of showing a dead end.
  */
 const UPSTREAM_TIMEOUT_MS = 9000;
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };
 
-function jsonResponse(statusCode, code, message, { retryable = false, headers = {} } = {}) {
-  return {
-    statusCode,
-    headers: {
-      ...JSON_HEADERS,
-      ...(retryable ? { 'retry-after': '2' } : {}),
-      ...headers,
-    },
-    body: JSON.stringify({ error: { code, message, retryable } }),
-  };
-}
-
-/** Headers that must not be copied between the browser and the upstream hop. */
-const HOP_BY_HOP = new Set([
+/**
+ * Headers that must not be copied from the browser to the upstream hop.
+ * `host`/`connection`/`transfer-encoding` etc. describe the Netlify hop rather
+ * than the request; `content-length` is recomputed by fetch from the body.
+ * `accept-encoding` is dropped because the reply's `content-encoding` is
+ * dropped too: forwarding the browser's list while handing back already-decoded
+ * bytes would make the browser try to decode plain text.
+ */
+const DROPPED_REQUEST_HEADERS = new Set([
   'host',
   'connection',
   'keep-alive',
   'transfer-encoding',
   'upgrade',
   'content-length',
-  'content-encoding',
-  // Forwarding the browser's encoding list while stripping `content-encoding`
-  // from the reply would hand the browser compressed bytes it will not decode,
-  // so the runtime negotiates and decodes the upstream response itself.
   'accept-encoding',
   // The origin is what CORS checks; the backend must see the proxy as a direct
   // caller, exactly like a server-side request from the same deployment.
   'origin',
 ]);
 
-function apiPathFromEvent(event) {
-  const path = String(event.path ?? '/');
+/** Headers that describe the upstream hop, not the proxied response. */
+const DROPPED_RESPONSE_HEADERS = new Set([
+  'connection',
+  'keep-alive',
+  'transfer-encoding',
+  'upgrade',
+  'content-length',
+  'content-encoding',
+  'set-cookie',
+]);
+
+function jsonResponse(status, code, message, { retryable = false, headers = {} } = {}) {
+  return new Response(JSON.stringify({ error: { code, message, retryable } }), {
+    status,
+    headers: {
+      ...JSON_HEADERS,
+      ...(retryable ? { 'retry-after': '2' } : {}),
+      ...headers,
+    },
+  });
+}
+
+/**
+ * Map the invoking URL back to the API path the backend serves.
+ *
+ * The redirect in `netlify.toml` rewrites `/api/x` to
+ * `/.netlify/functions/api/x`, but a runtime may expose either the rewritten or
+ * the original pathname on `request.url`, so both shapes are accepted. The
+ * mapping is idempotent: it never adds a second `/api` prefix.
+ */
+function apiPathFromPathname(pathname) {
   const functionPrefix = '/.netlify/functions/api';
-  const suffix = path.startsWith(functionPrefix) ? path.slice(functionPrefix.length) : path;
-  if (suffix === '/api' || suffix.startsWith('/api/')) return suffix;
-  return `/api${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
+  let rest = String(pathname || '/');
+  if (rest === functionPrefix) rest = '/';
+  else if (rest.startsWith(`${functionPrefix}/`)) rest = rest.slice(functionPrefix.length);
+
+  if (rest === '/api') return '/api';
+  if (rest.startsWith('/api/')) return rest;
+  return `/api${rest.startsWith('/') ? rest : `/${rest}`}`;
+}
+
+/** Keep any base path in the configured backend URL, e.g. https://host/learnsphere. */
+function upstreamPath(basePath, apiPath) {
+  const base = basePath.replace(/\/+$/, '');
+  if (!base) return apiPath;
+  if (base.endsWith('/api') && apiPath.startsWith('/api/')) return `${base}${apiPath.slice(4)}`;
+  return `${base}${apiPath}`;
 }
 
 function resolveBackendUrl() {
@@ -72,7 +112,17 @@ function resolveBackendUrl() {
   return { url: configured || DEFAULT_BACKEND_URL, source: configured ? 'env' : 'default' };
 }
 
-export async function handler(event) {
+function upstreamSignal(request) {
+  const timeout = AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
+  // Combine with the browser's abort signal when the runtime provides one, so a
+  // visitor who navigates away does not keep the upstream call alive.
+  if (typeof AbortSignal.any === 'function' && request.signal) {
+    return AbortSignal.any([request.signal, timeout]);
+  }
+  return timeout;
+}
+
+export async function handler(request) {
   const { url: backendUrl, source } = resolveBackendUrl();
 
   let backend;
@@ -88,28 +138,31 @@ export async function handler(event) {
     );
   }
 
-  const path = apiPathFromEvent(event);
-  const rawQuery = event.rawQuery ?? '';
-  const target = new URL(`${backend.origin}${path}`);
-  if (rawQuery) target.search = rawQuery;
-  else if (event.queryStringParameters) {
-    target.search = new URLSearchParams(event.queryStringParameters).toString();
+  let requestUrl;
+  try {
+    requestUrl = new URL(request.url);
+  } catch {
+    return jsonResponse(400, 'bad_request', 'The request URL could not be read.');
   }
+
+  const path = apiPathFromPathname(requestUrl.pathname);
+  const target = new URL(backend.origin);
+  target.pathname = upstreamPath(backend.pathname, path);
+  target.search = requestUrl.search;
+
+  const method = String(request.method ?? 'GET').toUpperCase();
 
   const headers = new Headers();
-  for (const [name, value] of Object.entries(event.headers ?? {})) {
-    const key = name.toLowerCase();
-    if (HOP_BY_HOP.has(key)) continue;
-    if (value !== undefined && value !== null) headers.set(key, value);
-  }
+  request.headers.forEach((value, name) => {
+    if (DROPPED_REQUEST_HEADERS.has(name.toLowerCase())) return;
+    headers.set(name, value);
+  });
 
-  const method = String(event.httpMethod ?? 'GET').toUpperCase();
-  const body =
-    ['GET', 'HEAD'].includes(method) || event.body == null
-      ? undefined
-      : event.isBase64Encoded
-        ? Buffer.from(event.body, 'base64')
-        : event.body;
+  let body;
+  if (!['GET', 'HEAD'].includes(method)) {
+    const buffer = await request.arrayBuffer();
+    body = buffer.byteLength > 0 ? buffer : undefined;
+  }
 
   let upstream;
   try {
@@ -118,7 +171,7 @@ export async function handler(event) {
       headers,
       body,
       redirect: 'manual',
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      signal: upstreamSignal(request),
     });
   } catch (err) {
     // The backend host is private infrastructure detail, so it goes to the
@@ -147,24 +200,33 @@ export async function handler(event) {
     );
   }
 
-  const responseHeaders = {};
+  const responseHeaders = new Headers();
   upstream.headers.forEach((value, name) => {
     const key = name.toLowerCase();
-    if (['connection', 'content-length', 'content-encoding', 'transfer-encoding'].includes(key)) return;
-    responseHeaders[key] = value;
+    if (DROPPED_RESPONSE_HEADERS.has(key)) return;
+    responseHeaders.append(key, value);
   });
+  // `forEach` merges multiple Set-Cookie values into one broken string; the
+  // dedicated accessor keeps them separate.
+  for (const cookie of upstream.headers.getSetCookie?.() ?? []) {
+    responseHeaders.append('set-cookie', cookie);
+  }
 
-  const responseBody =
-    method === 'HEAD' || upstream.status === 204 || upstream.status === 304
-      ? ''
-      : Buffer.from(await upstream.arrayBuffer()).toString('base64');
+  // A Response may only carry an RFC 9110 status code. An upstream that answers
+  // 1xx (a protocol switch, which fetch cannot complete) would otherwise throw
+  // here and turn one odd upstream reply into a blank 502 for the browser.
+  const status = upstream.status < 200 || upstream.status > 599 ? 502 : upstream.status;
 
-  return {
-    statusCode: upstream.status,
-    headers: responseHeaders,
-    body: responseBody,
-    isBase64Encoded: responseBody !== '',
-  };
+  // 204, 205 and 304 must not carry a body, and HEAD returns headers only.
+  const bodyless = method === 'HEAD' || status === 204 || status === 205 || status === 304;
+  if (bodyless) {
+    const declaredLength = upstream.headers.get('content-length');
+    if (method === 'HEAD' && declaredLength) responseHeaders.set('content-length', declaredLength);
+    return new Response(null, { status, headers: responseHeaders });
+  }
+
+  const payload = await upstream.arrayBuffer();
+  return new Response(payload, { status, headers: responseHeaders });
 }
 
 export default handler;
