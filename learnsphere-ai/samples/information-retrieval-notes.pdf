@@ -1,0 +1,99 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> /ProcSet [/PDF /Text] >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 684 >>
+stream
+BT
+/F1 11 Tf
+15 TL
+72 720 Td
+(# Information retrieval: precision and recall) Tj T*
+() Tj T*
+(Information retrieval is the task of finding material in an unstructured store that) Tj T*
+(matches an information need.) Tj T*
+() Tj T*
+(Precision measures the fraction of retrieved documents that are relevant. Recall) Tj T*
+(measures the fraction of relevant documents that were retrieved. The two pull in) Tj T*
+(opposite directions: returning more documents raises recall and lowers precision.) Tj T*
+() Tj T*
+(A ranked retrieval system returns an ordered list, so a cutoff at rank k gives a) Tj T*
+(precision-at-k figure. The break-even point is where precision equals recall.) Tj T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> /ProcSet [/PDF /Text] >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 652 >>
+stream
+BT
+/F1 11 Tf
+15 TL
+72 720 Td
+(# Relevance scoring) Tj T*
+() Tj T*
+(TF-IDF weights a term by how often it appears in a document and how rare it is across) Tj T*
+(the collection. A term appearing in every document carries little discriminative weight.) Tj T*
+() Tj T*
+(BM25 is a probabilistic ranking function that extends TF-IDF with term-frequency) Tj T*
+(saturation and document-length normalisation. Saturation means that the tenth occurrence) Tj T*
+(of a word adds much less than the second.) Tj T*
+() Tj T*
+(The k1 and b parameters control saturation and length normalisation. With b set to 0,) Tj T*
+(document length is ignored entirely.) Tj T*
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> /ProcSet [/PDF /Text] >> /Contents 8 0 R >>
+endobj
+8 0 obj
+<< /Length 581 >>
+stream
+BT
+/F1 11 Tf
+15 TL
+72 720 Td
+(# Evaluation) Tj T*
+() Tj T*
+(Evaluation uses a test collection of documents, queries and a judgement of which) Tj T*
+(documents are relevant.) Tj T*
+() Tj T*
+(Mean average precision averages precision at each relevant retrieved position over all) Tj T*
+(queries. Normalised discounted cumulative gain accounts for graded rather than binary) Tj T*
+(relevance.) Tj T*
+() Tj T*
+(An inverted index maps each term to the postings list of documents that contain it,) Tj T*
+(which is what makes ranked retrieval fast enough to serve interactively.) Tj T*
+ET
+endstream
+endobj
+9 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+xref
+0 10
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000127 00000 n 
+0000000275 00000 n 
+0000001010 00000 n 
+0000001158 00000 n 
+0000001861 00000 n 
+0000002009 00000 n 
+0000002641 00000 n 
+trailer
+<< /Size 10 /Root 1 0 R >>
+startxref
+2738
+%%EOF

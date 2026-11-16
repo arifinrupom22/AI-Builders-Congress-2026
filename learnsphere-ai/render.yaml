@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: learnsphere-ai-api
+    runtime: node
+    plan: 0.5c-512mb
+    region: singapore
+    buildCommand: npm ci
+    startCommand: npm run start --workspace server
+    healthCheckPath: /api/health
+    disk:
+      name: learnsphere-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: LEARNSPHERE_DATA_DIR
+        value: /var/data/learnsphere
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false

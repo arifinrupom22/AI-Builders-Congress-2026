@@ -1,0 +1,24 @@
+{
+  "name": "@learnsphere/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "LearnSphere AI backend: document ingestion, BM25 source-grounded retrieval, AI provider abstraction, quizzes and progress.",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test \"test/*.test.js\"",
+    "test:eval": "node --test \"test/eval.test.js\""
+  },
+  "dependencies": {
+    "dotenv": "^18.0.7",
+    "express": "^5.3.0",
+    "multer": "^2.4.0",
+    "pdfjs-dist": "^6.4.299",
+    "zod": "^4.6.7"
+  }
+}
