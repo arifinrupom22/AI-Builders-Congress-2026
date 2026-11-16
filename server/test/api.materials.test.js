@@ -318,6 +318,95 @@ test('upload records Bangla material as Bangla so summaries and quizzes follow i
   assert.equal(quiz.body.quiz.language, 'bn', 'with no topic given, the material decides the quiz language');
 });
 
+test('organisation: subject, tags and pinning persist across list and inspect', async (t) => {
+  const h = await createHarness();
+  t.after(() => h.close());
+
+  const upload = await h.api.upload('thermo.txt', Buffer.from(NOTES, 'utf8'), { mimeType: 'text/plain' });
+  const id = upload.body.material.id;
+  assert.equal(upload.body.material.subject, null, 'a new material starts unsorted');
+  assert.deepEqual(upload.body.material.tags, []);
+  assert.equal(upload.body.material.pinned, false);
+
+  const organised = await h.api.patch(`/api/materials/${id}`, {
+    subject: '  Physics  ',
+    tags: ['Thermo', 'exam', 'thermo', '  '],
+    pinned: true,
+  });
+  assert.equal(organised.status, 200);
+  assert.equal(organised.body.material.subject, 'Physics', 'subject is trimmed');
+  assert.deepEqual(organised.body.material.tags, ['Thermo', 'exam'], 'tags are trimmed and de-duplicated case-insensitively');
+  assert.equal(organised.body.material.pinned, true);
+
+  // The label survives a reload — it is stored, not held in the browser.
+  const list = await h.api.get('/api/materials');
+  assert.equal(list.body.materials[0].subject, 'Physics');
+  assert.deepEqual(list.body.materials[0].tags, ['Thermo', 'exam']);
+  assert.equal(list.body.materials[0].pinned, true);
+
+  // Indexing state and content are untouched by labelling.
+  assert.equal(list.body.materials[0].status, 'ready');
+  assert.ok(list.body.materials[0].passageCount >= 1);
+  const detail = await h.api.get(`/api/materials/${id}`);
+  assert.equal(detail.body.material.subject, 'Physics');
+  assert.ok(detail.body.outline.length >= 1, 'the outline still resolves');
+
+  // Clearing the subject returns the material to "Unsorted".
+  const cleared = await h.api.patch(`/api/materials/${id}`, { subject: '' });
+  assert.equal(cleared.body.material.subject, null);
+
+  // Pinning can be undone independently of the other fields.
+  const unpinned = await h.api.patch(`/api/materials/${id}`, { pinned: false });
+  assert.equal(unpinned.body.material.pinned, false);
+  assert.equal(unpinned.body.material.subject, null, 'other fields are untouched by a pin change');
+});
+
+test('organisation: validation refuses bad input and unknown ids', async (t) => {
+  const h = await createHarness();
+  t.after(() => h.close());
+
+  const upload = await h.api.upload('notes.txt', Buffer.from(SAMPLE_TEXT, 'utf8'), { mimeType: 'text/plain' });
+  const id = upload.body.material.id;
+
+  const empty = await h.api.patch(`/api/materials/${id}`, {});
+  assert.equal(empty.status, 400, 'an empty patch has nothing to apply');
+
+  const tooManyTags = await h.api.patch(`/api/materials/${id}`, {
+    tags: Array.from({ length: 20 }, (_, i) => `tag-${i}`),
+  });
+  assert.equal(tooManyTags.status, 400);
+  assert.equal(tooManyTags.body.error.code, 'bad_request');
+
+  const longSubject = await h.api.patch(`/api/materials/${id}`, { subject: 'x'.repeat(200) });
+  assert.equal(longSubject.status, 400);
+
+  const notPinned = await h.api.patch(`/api/materials/${id}`, { pinned: 'yes' });
+  assert.equal(notPinned.status, 400, 'pinned must be a boolean');
+
+  const unknown = await h.api.patch('/api/materials/00000000-0000-4000-8000-000000000000', { pinned: true });
+  assert.equal(unknown.status, 404);
+
+  // Another learner's material is invisible, exactly as if it did not exist.
+  const foreign = await h.api.patch(`/api/materials/${id}`, { pinned: true }, 'someone-else');
+  assert.equal(foreign.status, 404);
+  const stillMine = await h.api.get('/api/materials');
+  assert.equal(stillMine.body.materials[0].pinned, false, 'the original record is unchanged');
+});
+
+test('organisation: a failed upload can still be labelled and pinned', async (t) => {
+  const h = await createHarness();
+  t.after(() => h.close());
+
+  const upload = await h.api.upload('corrupt.pdf', Buffer.from('%PDF-1.4\ngarbage'), { mimeType: 'application/pdf' });
+  assert.equal(upload.status, 422);
+  const id = upload.body.material.id;
+
+  const organised = await h.api.patch(`/api/materials/${id}`, { subject: 'To fix', tags: ['retry'] });
+  assert.equal(organised.status, 200, 'a stored-but-failed file can be organised like any other');
+  assert.equal(organised.body.material.subject, 'To fix');
+  assert.deepEqual(organised.body.material.tags, ['retry']);
+});
+
 test('request bodies over the JSON limit are rejected, not buffered', async (t) => {
   const h = await createHarness();
   t.after(() => h.close());

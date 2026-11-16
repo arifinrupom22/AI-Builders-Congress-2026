@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../lib/api.js';
 import { useApp } from '../store/AppContext.jsx';
+import { useRoute } from '../lib/router.jsx';
 import { Icon } from '../components/Icons.jsx';
 import {
   Alert,
@@ -22,24 +23,51 @@ import {
 } from '../components/ui.jsx';
 import { formatBytes, formatDate, formatNumber, formatRelative, pluralise, truncate } from '../lib/format.js';
 
-const STATUS_TONES = { ready: 'success', processing: 'warning', failed: 'danger' };
-const STATUS_LABELS = { ready: 'Indexed', processing: 'Processing', failed: 'Not indexed' };
+const STATUS_TONES = { ready: 'success', processing: 'warning', empty: 'warning', failed: 'danger' };
+const STATUS_LABELS = {
+  ready: 'Ready to study',
+  processing: 'Indexing…',
+  empty: 'Nothing to study',
+  failed: 'Indexing failed',
+};
+
+/** A one-line explanation of what a status means for the learner. */
+function statusExplains(material) {
+  switch (material.status) {
+    case 'ready':
+      return `${formatNumber(material.passageCount)} passage${pluralise(material.passageCount, '', 's')} indexed and searchable.`;
+    case 'processing':
+      return 'Still being extracted and indexed — this updates on its own.';
+    case 'empty':
+      return 'No selectable text was found, so there is nothing to study from this file yet.';
+    case 'failed':
+      return material.error?.message ?? 'Text could not be extracted. The file is kept so you can see why.';
+    default:
+      return null;
+  }
+}
 
 /** Jump to the Study summary page with this one document preselected. */
 function summariseOnly(material) {
   window.location.hash = `#/summary?ids=${material.id}`;
 }
 
-function MaterialRow({ material, onInspect, onDelete, busy }) {
+function MaterialRow({ material, onInspect, onDelete, onTogglePin, busy }) {
   const tone = STATUS_TONES[material.status] ?? 'neutral';
+  const explain = statusExplains(material);
   return (
-    <li className="material-row">
+    <li className={`material-row${material.pinned ? ' is-pinned' : ''}`}>
       <span className={`material-row__icon material-row__icon--${tone}`}>
         <Icon name="file" size={18} />
       </span>
 
       <div className="material-row__main">
         <div className="material-row__title-row">
+          {material.pinned ? (
+            <span className="material-row__pin-flag" title="Pinned" aria-label="Pinned">
+              <Icon name="pin" size={14} />
+            </span>
+          ) : null}
           <span className="material-row__name" title={material.name}>
             {material.name}
           </span>
@@ -57,8 +85,20 @@ function MaterialRow({ material, onInspect, onDelete, busy }) {
           <span>{formatNumber(material.passageCount)} passages</span>
           <span>{formatNumber(material.charCount)} characters</span>
           <span title={formatDate(material.createdAt)}>added {formatRelative(material.createdAt)}</span>
+          {material.subject ? <span>in {material.subject}</span> : <span>Unsorted</span>}
         </div>
-        {material.error ? <p className="material-row__error">{material.error.message ?? 'Text could not be extracted.'}</p> : null}
+        {material.tags?.length ? (
+          <ul className="material-row__tags">
+            {material.tags.map((tag) => (
+              <li key={tag} className="tag-chip">
+                <Icon name="tag" size={11} /> {tag}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {explain ? (
+          <p className={`material-row__status material-row__status--${tone}`}>{explain}</p>
+        ) : null}
         {material.warnings?.length ? (
           <ul className="material-row__warnings">
             {material.warnings.map((warning, i) => (
@@ -69,6 +109,17 @@ function MaterialRow({ material, onInspect, onDelete, busy }) {
       </div>
 
       <div className="material-row__actions">
+        <Button
+          variant="ghost"
+          size="sm"
+          icon="pin"
+          onClick={() => onTogglePin(material)}
+          disabled={busy}
+          aria-pressed={material.pinned}
+          title={material.pinned ? 'Unpin this document' : 'Pin this document to the top of your library'}
+        >
+          {material.pinned ? 'Unpin' : 'Pin'}
+        </Button>
         <Button
           variant="secondary"
           size="sm"
@@ -271,13 +322,17 @@ function UploadPanel({ config, onUploaded }) {
   );
 }
 
-function MaterialInspector({ material, onClose, onDeleted }) {
+function MaterialInspector({ material, onClose, onDeleted, onOrganised, subjects, busy }) {
   const [detail, setDetail] = useState(null);
   const [passages, setPassages] = useState(null);
   const [page, setPage] = useState(1);
   const [state, setState] = useState('loading');
   const [error, setError] = useState(null);
+  const [subjectDraft, setSubjectDraft] = useState(material.subject ?? '');
+  const [tagDraft, setTagDraft] = useState('');
+  const [saving, setSaving] = useState(false);
   const limit = 5;
+  const { notify } = useApp();
 
   const loadPassages = useCallback(
     async (nextPage, signal) => {
@@ -318,6 +373,36 @@ function MaterialInspector({ material, onClose, onDeleted }) {
     return () => controller.abort();
   }, [page, loadPassages]);
 
+  const save = useCallback(
+    async (patch) => {
+      setSaving(true);
+      try {
+        const result = await api.organiseMaterial(material.id, patch);
+        onOrganised?.(result.material);
+      } catch (err) {
+        notify(err.message, 'error');
+      } finally {
+        setSaving(false);
+      }
+    },
+    [material.id, notify, onOrganised],
+  );
+
+  const addTag = useCallback(() => {
+    const tag = tagDraft.trim();
+    if (!tag) return;
+    const tags = [...(material.tags ?? []), tag];
+    setTagDraft('');
+    save({ tags });
+  }, [material.tags, save, tagDraft]);
+
+  const removeTag = useCallback(
+    (tag) => {
+      save({ tags: (material.tags ?? []).filter((t) => t !== tag) });
+    },
+    [material.tags, save],
+  );
+
   return (
     <Card
       title={material.name}
@@ -349,7 +434,11 @@ function MaterialInspector({ material, onClose, onDeleted }) {
           <div className="kv-grid">
             <div className="kv">
               <span className="kv__k">Status</span>
-              <span className="kv__v">{STATUS_LABELS[detail.material.status] ?? detail.material.status}</span>
+              <span className="kv__v">
+                <Badge tone={STATUS_TONES[detail.material.status] ?? 'neutral'}>
+                  {STATUS_LABELS[detail.material.status] ?? detail.material.status}
+                </Badge>
+              </span>
             </div>
             <div className="kv">
               <span className="kv__k">Pages</span>
@@ -362,6 +451,139 @@ function MaterialInspector({ material, onClose, onDeleted }) {
             <div className="kv">
               <span className="kv__k">Added</span>
               <span className="kv__v">{formatDate(detail.material.createdAt)}</span>
+            </div>
+            <div className="kv">
+              <span className="kv__k">Type</span>
+              <span className="kv__v">
+                {(detail.material.ext ?? '').replace('.', '') || 'file'} · {formatBytes(detail.material.sizeBytes)}
+              </span>
+            </div>
+            <div className="kv">
+              <span className="kv__k">Detected language</span>
+              <span className="kv__v">
+                {detail.material.language === 'bn' ? 'বাংলা' : detail.material.language === 'en' ? 'English' : '—'}
+              </span>
+            </div>
+          </div>
+
+          {/* Source details: how to identify this exact file elsewhere. */}
+          <h3 className="subhead">Source details</h3>
+          <dl className="source-facts">
+            <div className="source-facts__row">
+              <dt>File name</dt>
+              <dd>{detail.material.name}</dd>
+            </div>
+            <div className="source-facts__row">
+              <dt>SHA-256</dt>
+              <dd className="source-facts__hash">{detail.material.sha256}</dd>
+            </div>
+            <div className="source-facts__row">
+              <dt>Origin</dt>
+              <dd>{detail.material.source === 'upload' ? 'Uploaded from this device' : detail.material.source}</dd>
+            </div>
+            <div className="source-facts__row">
+              <dt>Uploaded</dt>
+              <dd>{formatDate(detail.material.createdAt)}</dd>
+            </div>
+          </dl>
+          <p className="muted-xs">
+            Every citation the AI Teacher and quiz generator produce points back to this file, its page
+            numbers and its passages. Labelling a document never changes its text or its citations.
+          </p>
+
+          {/* Organisation: subject, tags, pin. All learner-set. */}
+          <h3 className="subhead">Organisation</h3>
+          <div className="organise">
+            <Field label="Subject" hint="Group documents by course or topic. Leave empty to keep it in Unsorted.">
+              {({ id, ...aria }) => (
+                <div className="organise__row">
+                  <input
+                    id={id}
+                    className="ls-input"
+                    type="text"
+                    list="subject-suggestions"
+                    maxLength={60}
+                    value={subjectDraft}
+                    placeholder="e.g. Physics, DBMS, Higher Math"
+                    onChange={(e) => setSubjectDraft(e.target.value)}
+                    disabled={saving || busy}
+                    {...aria}
+                  />
+                  <Button
+                    variant="secondary"
+                    onClick={() => save({ subject: subjectDraft.trim() || null })}
+                    loading={saving}
+                    disabled={busy || subjectDraft.trim() === (material.subject ?? '')}
+                  >
+                    Save
+                  </Button>
+                </div>
+              )}
+            </Field>
+            <datalist id="subject-suggestions">
+              {subjects.map((subject) => (
+                <option key={subject} value={subject} />
+              ))}
+            </datalist>
+
+            <div className="organise__field">
+              <span className="ls-field__label">Tags</span>
+              {material.tags?.length ? (
+                <ul className="chip-list organise__tags">
+                  {material.tags.map((tag) => (
+                    <li key={tag} className="chip">
+                      <Icon name="tag" size={12} /> {tag}
+                      <button
+                        type="button"
+                        className="chip__remove"
+                        aria-label={`Remove tag ${tag}`}
+                        onClick={() => removeTag(tag)}
+                        disabled={saving || busy}
+                      >
+                        <Icon name="close" size={11} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="muted-xs">No tags yet.</p>
+              )}
+              <div className="organise__row organise__row--tags">
+                <input
+                  className="ls-input"
+                  type="text"
+                  maxLength={32}
+                  value={tagDraft}
+                  placeholder="e.g. exam, revision, unit-1"
+                  onChange={(e) => setTagDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      addTag();
+                    }
+                  }}
+                  disabled={saving || busy}
+                  aria-label="New tag"
+                />
+                <Button variant="secondary" icon="plus" onClick={addTag} loading={saving} disabled={busy || !tagDraft.trim()}>
+                  Add tag
+                </Button>
+              </div>
+              <p className="ls-field__hint">Up to 12 tags. Press Enter to add.</p>
+            </div>
+
+            <div className="organise__field">
+              <Button
+                variant={material.pinned ? 'primary' : 'secondary'}
+                icon="pin"
+                onClick={() => save({ pinned: !material.pinned })}
+                loading={saving}
+                disabled={busy}
+                aria-pressed={material.pinned}
+              >
+                {material.pinned ? 'Pinned to top' : 'Pin to top'}
+              </Button>
+              <p className="ls-field__hint">Pinned documents stay at the top of your library.</p>
             </div>
           </div>
 
@@ -533,11 +755,230 @@ function SearchPanel({ materials }) {
   );
 }
 
+const SORTS = [
+  { id: 'newest', label: 'Newest first' },
+  { id: 'oldest', label: 'Oldest first' },
+  { id: 'name', label: 'Name (A–Z)' },
+  { id: 'largest', label: 'Largest first' },
+];
+
+const STATUS_FILTERS = [
+  { id: 'all', label: 'Any status' },
+  { id: 'ready', label: 'Ready to study' },
+  { id: 'processing', label: 'Indexing' },
+  { id: 'failed', label: 'Failed' },
+  { id: 'empty', label: 'Nothing to study' },
+];
+
+/** Pin first, then apply the chosen sort order. */
+function sortMaterials(list, sort) {
+  const bySort = {
+    newest: (a, b) => (a.createdAt < b.createdAt ? 1 : -1),
+    oldest: (a, b) => (a.createdAt > b.createdAt ? 1 : -1),
+    name: (a, b) => a.name.localeCompare(b.name),
+    largest: (a, b) => (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0),
+  };
+  const compare = bySort[sort] ?? bySort.newest;
+  return [...list].sort((a, b) => {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+    return compare(a, b);
+  });
+}
+
+function LibraryToolbar({
+  materials,
+  subjects,
+  tags,
+  query,
+  setQuery,
+  subject,
+  setSubject,
+  tag,
+  setTag,
+  type,
+  setType,
+  status,
+  setStatus,
+  sort,
+  setSort,
+}) {
+  const kinds = useMemo(() => {
+    const set = new Set(materials.map((m) => (m.ext ?? '').replace('.', '')).filter(Boolean));
+    return [...set].sort();
+  }, [materials]);
+
+  const dirty = query || subject !== 'all' || tag !== 'all' || type !== 'all' || status !== 'all';
+
+  return (
+    <div className="lib-toolbar">
+      <Field label="Search documents">
+        {({ id, ...aria }) => (
+          <input
+            id={id}
+            className="ls-input"
+            type="search"
+            value={query}
+            placeholder="Search by name, subject or tag"
+            onChange={(e) => setQuery(e.target.value)}
+            {...aria}
+          />
+        )}
+      </Field>
+
+      <Field label="Subject">
+        {({ id }) => (
+          <select id={id} className="ls-input" value={subject} onChange={(e) => setSubject(e.target.value)}>
+            <option value="all">All subjects</option>
+            {subjects.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+            <option value="__unsorted__">Unsorted</option>
+          </select>
+        )}
+      </Field>
+
+      <Field label="Tag">
+        {({ id }) => (
+          <select id={id} className="ls-input" value={tag} onChange={(e) => setTag(e.target.value)}>
+            <option value="all">Any tag</option>
+            {tags.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        )}
+      </Field>
+
+      <Field label="File type">
+        {({ id }) => (
+          <select id={id} className="ls-input" value={type} onChange={(e) => setType(e.target.value)}>
+            <option value="all">Any type</option>
+            {kinds.map((k) => (
+              <option key={k} value={k}>
+                {k}
+              </option>
+            ))}
+          </select>
+        )}
+      </Field>
+
+      <Field label="Status">
+        {({ id }) => (
+          <select id={id} className="ls-input" value={status} onChange={(e) => setStatus(e.target.value)}>
+            {STATUS_FILTERS.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        )}
+      </Field>
+
+      <Field label="Sort by">
+        {({ id }) => (
+          <select id={id} className="ls-input" value={sort} onChange={(e) => setSort(e.target.value)}>
+            {SORTS.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        )}
+      </Field>
+
+      {dirty ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          icon="close"
+          onClick={() => {
+            setQuery('');
+            setSubject('all');
+            setTag('all');
+            setType('all');
+            setStatus('all');
+          }}
+        >
+          Clear filters
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function CollectionsRail({ subjects, counts, subject, setSubject }) {
+  return (
+    <nav className="collections" aria-label="Collections">
+      <p className="collections__title">Collections</p>
+      <ul className="collections__list">
+        <li>
+          <button
+            type="button"
+            className={`collections__item${subject === 'all' ? ' is-active' : ''}`}
+            onClick={() => setSubject('all')}
+          >
+            <Icon name="library" size={15} />
+            <span className="collections__name">All material</span>
+            <span className="collections__count">{counts.all}</span>
+          </button>
+        </li>
+        {subjects.map((s) => (
+          <li key={s}>
+            <button
+              type="button"
+              className={`collections__item${subject === s ? ' is-active' : ''}`}
+              onClick={() => setSubject(s)}
+            >
+              <Icon name="folder" size={15} />
+              <span className="collections__name">{s}</span>
+              <span className="collections__count">{counts.subjects[s] ?? 0}</span>
+            </button>
+          </li>
+        ))}
+        <li>
+          <button
+            type="button"
+            className={`collections__item${subject === '__unsorted__' ? ' is-active' : ''}`}
+            onClick={() => setSubject('__unsorted__')}
+          >
+            <Icon name="file" size={15} />
+            <span className="collections__name">Unsorted</span>
+            <span className="collections__count">{counts.unsorted}</span>
+          </button>
+        </li>
+      </ul>
+    </nav>
+  );
+}
+
 export default function MaterialsPage() {
   const { materials, materialsState, refreshMaterials, config, notify } = useApp();
-  const [selected, setSelected] = useState(null);
+  const route = useRoute();
+  // Only the id is held; the record itself is derived from the live list so an
+  // organisation change or a refresh cannot leave the open panel showing stale
+  // subject/tags/pin values.
+  const [selectedId, setSelectedId] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+
+  // A link like #/materials?id=<uuid> opens that document's inspector, so a
+  // citation elsewhere in the app can send the student to the source file.
+  useEffect(() => {
+    const id = route.params.get('id');
+    if (id && id !== selectedId) setSelectedId(id);
+  }, [route.params, selectedId]);
+
+  // Library filters. All client-side: the library is small and the learner
+  // should see results as they type.
+  const [query, setQuery] = useState('');
+  const [subject, setSubject] = useState('all');
+  const [tag, setTag] = useState('all');
+  const [type, setType] = useState('all');
+  const [status, setStatus] = useState('all');
+  const [sort, setSort] = useState('newest');
 
   const onUploaded = useCallback(async () => {
     await refreshMaterials();
@@ -551,7 +992,7 @@ export default function MaterialsPage() {
       try {
         await api.deleteMaterial(material.id);
         notify(`Removed ${material.name}`, 'success');
-        if (selected?.id === material.id) setSelected(null);
+        if (selectedId === material.id) setSelectedId(null);
         await refreshMaterials();
       } catch (err) {
         notify(err.message, 'error');
@@ -559,7 +1000,32 @@ export default function MaterialsPage() {
         setBusy(false);
       }
     },
-    [notify, refreshMaterials, selected],
+    [notify, refreshMaterials, selectedId],
+  );
+
+  /** Organisation save from the inspector. The list refresh restores the row. */
+  const onOrganised = useCallback(
+    async (updated) => {
+      await refreshMaterials();
+      return updated;
+    },
+    [refreshMaterials],
+  );
+
+  const onTogglePin = useCallback(
+    async (material) => {
+      setBusy(true);
+      try {
+        await api.organiseMaterial(material.id, { pinned: !material.pinned });
+        notify(material.pinned ? `Unpinned ${material.name}` : `Pinned ${material.name}`, 'success');
+        await refreshMaterials();
+      } catch (err) {
+        notify(err.message, 'error');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [notify, refreshMaterials],
   );
 
   const totals = useMemo(
@@ -570,6 +1036,53 @@ export default function MaterialsPage() {
     [materials],
   );
 
+  // Derived from the live library, so the open inspector always shows current
+  // values. If the document was deleted, the panel closes itself.
+  const selected = useMemo(
+    () => materials.find((m) => m.id === selectedId) ?? null,
+    [materials, selectedId],
+  );
+
+  /** Subjects in use, sorted. "Unsorted" is derived, never stored. */
+  const subjects = useMemo(() => {
+    const set = new Set(materials.map((m) => m.subject).filter(Boolean));
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [materials]);
+
+  const tags = useMemo(() => {
+    const set = new Set();
+    for (const m of materials) for (const t of m.tags ?? []) set.add(t);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [materials]);
+
+  const counts = useMemo(() => {
+    const bySubject = {};
+    let unsorted = 0;
+    for (const m of materials) {
+      if (m.subject) bySubject[m.subject] = (bySubject[m.subject] ?? 0) + 1;
+      else unsorted += 1;
+    }
+    return { subjects: bySubject, unsorted, all: materials.length };
+  }, [materials]);
+
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const list = materials.filter((m) => {
+      if (subject !== 'all') {
+        if (subject === '__unsorted__' ? m.subject : m.subject !== subject) return false;
+      }
+      if (tag !== 'all' && !(m.tags ?? []).includes(tag)) return false;
+      if (type !== 'all' && (m.ext ?? '').replace('.', '') !== type) return false;
+      if (status !== 'all' && m.status !== status) return false;
+      if (needle) {
+        const haystack = [m.name, m.subject ?? '', ...(m.tags ?? [])].join(' ').toLowerCase();
+        if (!haystack.includes(needle)) return false;
+      }
+      return true;
+    });
+    return sortMaterials(list, sort);
+  }, [materials, query, subject, tag, type, status, sort]);
+
   return (
     <div className="page">
       <UploadPanel config={config} onUploaded={onUploaded} />
@@ -577,61 +1090,108 @@ export default function MaterialsPage() {
       {selected ? (
         <MaterialInspector
           material={selected}
-          onClose={() => setSelected(null)}
+          subjects={subjects}
+          busy={busy}
+          onOrganised={onOrganised}
+          onClose={() => setSelectedId(null)}
           onDeleted={async (material) => {
             await onDelete(material);
           }}
         />
       ) : null}
 
-      <Card
-        title="Library"
-        subtitle={
-          materials.length
-            ? `${materials.length} file${pluralise(materials.length, '', 's')} · ${formatNumber(totals.passages)} indexed passages · ${formatBytes(totals.bytes)} stored`
-            : 'Nothing uploaded yet.'
-        }
-        actions={
-          <Button variant="ghost" size="sm" icon="refresh" onClick={() => refreshMaterials()}>
-            Refresh
-          </Button>
-        }
-      >
-        {materialsState === 'loading' && materials.length === 0 ? (
-          <LoadingPanel label="Loading your library" rows={3} />
-        ) : materialsState === 'error' ? (
-          <ErrorPanel
-            error={error}
-            title="Could not load your library"
-            onRetry={async () => {
-              setError(null);
-              try {
-                await refreshMaterials();
-              } catch (err) {
-                setError(err);
+      <div className="library">
+        <CollectionsRail subjects={subjects} counts={counts} subject={subject} setSubject={setSubject} />
+
+        <Card
+          title="Library"
+          subtitle={
+            materials.length
+              ? `${filtered.length === materials.length ? `${materials.length} file${pluralise(materials.length, '', 's')}` : `Showing ${filtered.length} of ${materials.length}`} · ${formatNumber(totals.passages)} indexed passages · ${formatBytes(totals.bytes)} stored`
+              : 'Nothing uploaded yet.'
+          }
+          actions={
+            <Button variant="ghost" size="sm" icon="refresh" onClick={() => refreshMaterials()}>
+              Refresh
+            </Button>
+          }
+        >
+          <LibraryToolbar
+            materials={materials}
+            subjects={subjects}
+            tags={tags}
+            query={query}
+            setQuery={setQuery}
+            subject={subject}
+            setSubject={setSubject}
+            tag={tag}
+            setTag={setTag}
+            type={type}
+            setType={setType}
+            status={status}
+            setStatus={setStatus}
+            sort={sort}
+            setSort={setSort}
+          />
+
+          {materialsState === 'loading' && materials.length === 0 ? (
+            <LoadingPanel label="Loading your library" rows={3} />
+          ) : materialsState === 'error' ? (
+            <ErrorPanel
+              error={error}
+              title="Could not load your library"
+              onRetry={async () => {
+                setError(null);
+                try {
+                  await refreshMaterials();
+                } catch (err) {
+                  setError(err);
+                }
+              }}
+            />
+          ) : materials.length === 0 ? (
+            <EmptyState
+              icon="library"
+              title="No study material yet"
+              description="Add a lecture note, a chapter, slides or your own notes: PDF, Word (.docx, .doc), Markdown (.md) and plain text (.txt) all work — in Bangla or English."
+            />
+          ) : filtered.length === 0 ? (
+            <EmptyState
+              icon="search"
+              title="No document matches these filters"
+              description="Try a different subject, tag or file type — or clear the filters to see your whole library."
+              action={
+                <Button
+                  variant="secondary"
+                  icon="close"
+                  onClick={() => {
+                    setQuery('');
+                    setSubject('all');
+                    setTag('all');
+                    setType('all');
+                    setStatus('all');
+                  }}
+                >
+                  Clear filters
+                </Button>
               }
-            }}
-          />
-        ) : materials.length === 0 ? (
-          <EmptyState
-            icon="library"
-            title="No study material yet"
-            description="Add a lecture note, a chapter, slides or your own notes: PDF, Word (.docx, .doc), Markdown (.md) and plain text (.txt) all work — in Bangla or English."
-          />
-        ) : (
-          <ul className="material-list">
-            {materials.map((material) => (
-              <MaterialRow
-                key={material.id}
-                material={material}
-                busy={busy}
-                onInspect={(m) => setSelected(m)}
-                onDelete={onDelete}
-              />
-            ))}
-          </ul>
-        )}
-      </Card>
+            />
+          ) : (
+            <ul className="material-list">
+              {filtered.map((material) => (
+                <MaterialRow
+                  key={material.id}
+                  material={material}
+                  busy={busy}
+                  onInspect={(m) => setSelectedId(m.id)}
+                  onDelete={onDelete}
+                  onTogglePin={onTogglePin}
+                />
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
 
       <SearchPanel materials={materials} />
 

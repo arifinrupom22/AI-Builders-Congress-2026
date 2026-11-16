@@ -10,7 +10,7 @@ import { z } from 'zod';
 import AppError from '../errors.js';
 import { ingestMaterial } from '../documents/ingest.js';
 import { assertSafeId } from '../storage/store.js';
-import { parseQuery } from './validate.js';
+import { parseBody, parseQuery } from './validate.js';
 import { ANSWER_MODES, ANSWER_LENGTHS } from '../ai/prompts.js';
 
 const idParam = z.string().trim();
@@ -25,6 +25,49 @@ const searchQuery = z.object({
   limit: z.coerce.number().int().min(1).max(20).default(8),
   materialIds: z.string().trim().max(2000).optional(),
 });
+
+// Learner-set organisation. Every bound is enforced server-side: the browser
+// is a convenience, never the guarantee. An empty subject becomes null so the
+// UI can show a real "Unsorted" bucket instead of a placeholder name.
+const MAX_TAGS = 12;
+const organiseBody = z
+  .object({
+    subject: z
+      .string()
+      .trim()
+      .max(60, 'A subject can be at most 60 characters.')
+      .nullable()
+      .optional(),
+    tags: z.preprocess(
+      // Blank entries are dropped rather than rejected: a stray comma in the
+      // tag box should not cost the learner a whole save.
+      (tags) => (Array.isArray(tags) ? tags.filter((t) => typeof t === 'string' && t.trim() !== '') : tags),
+      z
+        .array(z.string().trim().max(32, 'A tag can be at most 32 characters.'))
+        .max(MAX_TAGS, `At most ${MAX_TAGS} tags per document.`)
+        .optional(),
+    ),
+    pinned: z.boolean().optional(),
+  })
+  .refine((body) => Object.keys(body).length > 0, {
+    message: 'Supply at least one of: subject, tags, pinned.',
+  });
+
+/** Normalise tags: trim, drop empties, de-duplicate case-insensitively. */
+function normaliseTags(tags) {
+  if (!Array.isArray(tags)) return [];
+  const seen = new Set();
+  const result = [];
+  for (const raw of tags) {
+    const tag = String(raw).trim();
+    if (!tag) continue;
+    const key = tag.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(tag);
+  }
+  return result;
+}
 
 function parseMaterialIds(raw) {
   if (!raw) return null;
@@ -153,6 +196,34 @@ export function materialsRouter({ store, retrieval, config, logger, uploadMiddle
         text: p.text,
         charCount: p.charCount,
       })),
+    });
+  });
+
+  // Organisation: subject, tags, pinning. Content, passages and citations are
+  // untouched — this only labels the record the learner already has.
+  router.patch('/:id', async (req, res) => {
+    const id = assertSafeId(idParam.parse(req.params.id), 'material id');
+    const patch = parseBody(organiseBody, req.body);
+
+    const existing = await store.getMaterial(id, req.learnerId);
+    if (!existing) throw AppError.notFound('That material is not in your library.');
+
+    const update = {};
+    if ('subject' in patch) update.subject = patch.subject?.trim() || null;
+    if ('tags' in patch) update.tags = normaliseTags(patch.tags);
+    if ('pinned' in patch) update.pinned = patch.pinned === true;
+
+    const material = await store.organiseMaterial(id, req.learnerId, update);
+    if (!material) throw AppError.notFound('That material is not in your library.');
+
+    req.log.info('material organised', {
+      materialId: id,
+      fields: Object.keys(update),
+      pinned: material.pinned,
+    });
+    res.json({
+      material,
+      provenance: 'Your organisation labels are stored with the document; its text, passages and citations are unchanged.',
     });
   });
 

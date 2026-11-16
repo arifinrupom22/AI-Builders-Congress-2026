@@ -8,7 +8,7 @@
  * query time, so it cannot be bypassed by a crafted request.
  */
 import { buildIndex, searchIndex, buildSnippet } from './bm25.js';
-import { contentTokens } from './tokenize.js';
+import { contentTokens, expandQuery, stem } from './tokenize.js';
 
 export function createRetrievalService({ store, config, logger }) {
   /** @type {Map<string, {index:object, byId:Map<string,object>, materialsById:Map<string,object>, builtAt:string}>} */
@@ -60,6 +60,14 @@ export function createRetrievalService({ store, config, logger }) {
       const k = topK ?? config.retrieval.topK;
       const threshold = minScore ?? config.retrieval.minScore;
 
+      // Banglish/spelling variants are added only when the corpus actually uses
+      // them, so an expansion can never invent a match or widen the query into
+      // unknown vocabulary that would trip the refusal logic.
+      const expansions = cache.index.N === 0
+        ? []
+        : expandQuery(query).filter((term) => cache.index.df.has(stem(term)));
+      const effectiveQuery = expansions.length > 0 ? `${query} ${expansions.join(' ')}` : query;
+
       // Over-fetch, then apply the optional material filter, so selecting a
       // subset of documents does not silently return fewer passages than asked.
       const pool =
@@ -74,7 +82,7 @@ export function createRetrievalService({ store, config, logger }) {
               reason: 'empty_index',
               maxBm25: 0,
             }
-          : searchIndex(cache.index, query, {
+          : searchIndex(cache.index, effectiveQuery, {
               topK: materialIds?.length ? Math.max(k * 4, k) : k,
               minScore: threshold,
             });
@@ -126,6 +134,9 @@ export function createRetrievalService({ store, config, logger }) {
         }).filter(Boolean).filter((c) => !results.some((r) => r.passageId === c.passageId)),
         minScore: threshold,
         topK: k,
+        // Reported so the UI can say a query was widened by a known spelling
+        // variant (the student's own wording is still what gets cited).
+        queryExpansion: expansions,
         supported: results.length > 0,
         documentsSearched: cache.index.docCount,
         // Distinguishes "your material does not cover this" from "you have not

@@ -6,47 +6,97 @@ import { useEffect, useState } from 'react';
 import { useApp } from '../store/AppContext.jsx';
 import { Icon } from './Icons.jsx';
 import { Badge, Button } from './ui.jsx';
+import { PreferencesControls } from './PublicChrome.jsx';
 
 export const NAV = [
-  { to: '/', label: 'Overview', icon: 'home', title: 'Overview', blurb: 'Your library, activity and next step.' },
+  { to: '/dashboard', label: 'Overview', key: 'nav.overview', icon: 'home', title: 'Overview', blurb: 'Your library, activity and next step.' },
   {
     to: '/materials',
-    label: 'My Materials',
+    label: 'My Materials', key: 'nav.materials',
     icon: 'library',
     title: 'My Materials',
     blurb: 'Upload PDF, Word, Markdown or text files and inspect exactly what was indexed.',
   },
   {
     to: '/summary',
-    label: 'Study summary',
+    label: 'Study summary', key: 'nav.summary',
     icon: 'lightbulb',
     title: 'Study summary',
     blurb: 'Turn a document into cited revision notes, in the language it is written in.',
   },
   {
+    to: '/studio',
+    label: 'Visual studio', key: 'nav.studio',
+    icon: 'sitemap',
+    title: 'Visual Study Studio',
+    blurb: 'Source-grounded concept maps, flowcharts, tables and timelines from your own material.',
+  },
+  {
+    to: '/path',
+    label: 'Learning path', key: 'nav.path',
+    icon: 'route',
+    title: 'Step-by-step learning path',
+    blurb: 'One topic broken into short steps — prerequisite, explanation, visual, example and recall, each cited.',
+  },
+  {
     to: '/chat',
-    label: 'AI Teacher',
+    label: 'AI Teacher', key: 'nav.chat',
     icon: 'teacher',
     title: 'AI Teacher',
     blurb: 'Ask about your own material and get cited, verifiable answers.',
   },
   {
     to: '/quiz',
-    label: 'Practice',
+    label: 'Practice', key: 'nav.practice',
     icon: 'quiz',
     title: 'Practice quiz',
     blurb: 'Generate grounded questions from your material and check your answers.',
   },
   {
+    to: '/flashcards',
+    label: 'Flashcards', key: 'nav.flashcards',
+    icon: 'cards',
+    title: 'Flashcards',
+    blurb: 'Active-recall decks built from your own material — every answer cites its source page.',
+  },
+  {
+    to: '/review',
+    label: 'Due for review', key: 'nav.review',
+    icon: 'clock',
+    title: 'Due for review',
+    blurb: 'Cards your own ratings have brought back — review, rate again, or snooze.',
+  },
+  {
     to: '/progress',
-    label: 'Progress',
+    label: 'Progress', key: 'nav.progress',
     icon: 'chart',
     title: 'Progress',
     blurb: 'What you have practised, and what to revise next.',
   },
   {
+    to: '/coach',
+    label: 'Exam coach', key: 'nav.coach',
+    icon: 'compass',
+    title: 'Adaptive Exam Coach',
+    blurb: 'Your next quiz, chosen from recorded evidence — with the reason and a short next-step plan.',
+  },
+  {
+    to: '/plan',
+    label: 'Study plan', key: 'nav.plan',
+    icon: 'calendar',
+    title: 'Study plan',
+    blurb: 'Your syllabus mapped to your own documents, with a daily schedule you can edit, pause and complete.',
+  },
+  {
+    to: '/dna',
+    label: 'Learning DNA', key: 'nav.dna',
+    icon: 'dna',
+    title: 'Learning DNA',
+    blurb: 'An evidence profile of the concepts you have practised — attempts, real accuracy and your own flashcard ratings.',
+  },
+  {
     to: '/settings',
-    label: 'Settings',
+    label: 'Settings', key: 'nav.settings',
     icon: 'settings',
     title: 'Settings',
     blurb: 'AI provider status, study profile and data controls.',
@@ -54,8 +104,8 @@ export const NAV = [
 ];
 
 export function findNavEntry(path) {
-  if (path === '/') return NAV[0];
-  return NAV.find((entry) => entry.to !== '/' && path.startsWith(entry.to)) ?? null;
+  if (path === '/' || path === '/dashboard') return NAV[0];
+  return NAV.find((entry) => entry.to !== '/dashboard' && path.startsWith(entry.to)) ?? null;
 }
 
 function AiModeBadge({ ai }) {
@@ -91,9 +141,25 @@ export function ToastStack({ toasts, onDismiss }) {
 }
 
 export function AppShell({ route, children }) {
-  const { ai, materials, learnerId, toasts, dismissToast, health, refreshMaterials, bootState } = useApp();
+  const { ai, materials, learnerId, auth, toasts, dismissToast, health, refreshMaterials, bootState, config, t, signOut, notify } =
+    useApp();
+  const accountName = auth?.user ? auth.user.displayName || auth.user.email : null;
+  const demoMode = config?.auth?.mode !== 'required';
   const active = findNavEntry(route.path);
   const [navOpen, setNavOpen] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+
+  async function handleSignOut() {
+    setSigningOut(true);
+    try {
+      await signOut();
+      window.location.hash = '#/login';
+    } catch (err) {
+      notify(err.message ?? 'Could not sign out.', 'error');
+    } finally {
+      setSigningOut(false);
+    }
+  }
 
   // Close the mobile drawer whenever the route changes.
   useEffect(() => {
@@ -105,8 +171,15 @@ export function AppShell({ route, children }) {
   return (
     <div className={`app${navOpen ? ' app--nav-open' : ''}`}>
       <a className="skip-link" href="#content">
-        Skip to content
+        {t('shell.skip')}
       </a>
+
+      {demoMode ? (
+        <div className="demo-banner" role="status">
+          <Icon name="info" size={15} />
+          <span>{t('shell.demoBanner')}</span>
+        </div>
+      ) : null}
 
       <aside className="app__sidebar" aria-label="Primary">
         <div className="app__brand">
@@ -115,13 +188,16 @@ export function AppShell({ route, children }) {
           </span>
           <span className="app__brand-text">
             LearnSphere <strong>AI</strong>
-            <small>Source-grounded tutor</small>
+            <small>{t('shell.brandSub')}</small>
           </span>
         </div>
 
         <nav className="app__nav">
           {NAV.map((entry) => {
-            const isActive = entry.to === '/' ? route.path === '/' : route.path.startsWith(entry.to);
+            const isActive =
+              entry.to === '/dashboard'
+                ? route.path === '/' || route.path === '/dashboard'
+                : route.path.startsWith(entry.to);
             return (
               <a
                 key={entry.to}
@@ -131,7 +207,7 @@ export function AppShell({ route, children }) {
                 onClick={() => setNavOpen(false)}
               >
                 <Icon name={entry.icon} size={18} />
-                <span>{entry.label}</span>
+                <span>{t(entry.key, entry.label)}</span>
                 {entry.to === '/materials' && materials.length > 0 ? (
                   <span className="app__nav-count">{readyCount}</span>
                 ) : null}
@@ -146,12 +222,29 @@ export function AppShell({ route, children }) {
               <Icon name="user" size={16} />
             </span>
             <div className="app__profile-body">
-              <span className="app__profile-label">Study profile</span>
-              <span className="app__profile-name">{learnerId}</span>
+              <span className="app__profile-label">{accountName ? t('shell.signedIn') : t('shell.studyProfile')}</span>
+              <span className="app__profile-name">{accountName ?? learnerId}</span>
             </div>
-            <a href="#/settings" className="app__profile-link" title="Change profile" aria-label="Change study profile">
+            <a
+              href="#/settings"
+              className="app__profile-link"
+              title={accountName ? t('shell.accountSettings') : t('shell.changeProfile')}
+              aria-label={accountName ? t('shell.accountSettings') : t('shell.changeProfile')}
+            >
               <Icon name="settings" size={15} />
             </a>
+            {accountName ? (
+              <button
+                type="button"
+                className="app__profile-link"
+                title={t('common.signOut')}
+                aria-label={t('common.signOut')}
+                disabled={signingOut}
+                onClick={handleSignOut}
+              >
+                <Icon name="logOut" size={15} />
+              </button>
+            ) : null}
           </div>
           <p className="app__privacy">{ai?.privacy ?? 'No document text leaves this machine.'}</p>
         </div>
@@ -172,11 +265,12 @@ export function AppShell({ route, children }) {
           </button>
 
           <div className="app__header-text">
-            <h1 className="app__title">{active?.title ?? 'Not found'}</h1>
+            <h1 className="app__title">{active ? t(active.key, active.title) : 'Not found'}</h1>
             {active?.blurb ? <p className="app__subtitle">{active.blurb}</p> : null}
           </div>
 
           <div className="app__header-side">
+            <PreferencesControls className="prefs--compact" />
             <AiModeBadge ai={ai} />
             {health ? (
               <Badge
@@ -194,7 +288,7 @@ export function AppShell({ route, children }) {
               onClick={() => refreshMaterials()}
               title="Reload your library from the server"
             >
-              Sync
+              {t('shell.sync')}
             </Button>
           </div>
         </header>
@@ -204,12 +298,8 @@ export function AppShell({ route, children }) {
         </main>
 
         <footer className="app__footer">
-          <span>
-            International AI Builders Congress 2026 · Challenge: AI Teacher · Team NITER_Parallax
-          </span>
-          <span className="app__footer-meta">
-            Answers are citation-verified against your own uploads. LearnSphere AI never measures mastery.
-          </span>
+          <span>{t('shell.footer')}</span>
+          <span className="app__footer-meta">{t('shell.footerNote')}</span>
         </footer>
       </div>
 

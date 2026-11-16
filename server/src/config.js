@@ -150,10 +150,42 @@ function resolveAi() {
 }
 
 const ai = resolveAi();
+const envName = str('NODE_ENV', 'development') || 'development';
+
+/**
+ * Identity mode.
+ *
+ * 'required' is the only safe choice for a public deployment, so production
+ * defaults to it. Development and the test suite keep the profile-based local
+ * mode, which is what makes `npm run dev` work with no setup at all.
+ */
+const AUTH_MODES = ['local', 'required'];
+// An empty value (the template ships `AUTH_MODE=`) means "use the default",
+// which is `required` in production and `local` everywhere else.
+const authModeDefault = envName === 'production' ? 'required' : 'local';
+const requestedAuthMode = (str('AUTH_MODE') || authModeDefault).toLowerCase();
+if (!AUTH_MODES.includes(requestedAuthMode)) {
+  rejected.push(`AUTH_MODE=${requestedAuthMode} (unknown) - using local`);
+}
+const authMode = AUTH_MODES.includes(requestedAuthMode) ? requestedAuthMode : 'local';
+
+/**
+ * Number of reverse-proxy hops to trust for `req.ip` (and therefore for rate
+ * limiting). Only a hop count is accepted: `true`/an arbitrary header cannot be
+ * configured, because trusting a client-supplied X-Forwarded-For would let any
+ * caller mint a fresh identity for every request. 0 disables it.
+ */
+const trustProxyRaw = (str('TRUST_PROXY') || '0').toLowerCase();
+const parsedTrustProxy = trustProxyRaw === 'false' ? 0 : Number.parseInt(trustProxyRaw, 10);
+const trustProxy = Number.isFinite(parsedTrustProxy) ? Math.max(0, Math.min(5, parsedTrustProxy)) : 0;
+if (trustProxyRaw !== '0' && !Number.isFinite(parsedTrustProxy)) {
+  rejected.push(`TRUST_PROXY=${trustProxyRaw} (not a hop count) - using 0`);
+}
 
 export const config = Object.freeze({
   version: '0.1.0',
-  env: str('NODE_ENV', 'development') || 'development',
+  env: envName,
+  trustProxy,
   port: num('PORT', 8787, { min: 1, max: 65535 }),
   corsAllowedOrigins: str('CORS_ALLOWED_ORIGINS')
     .split(',')
@@ -201,7 +233,21 @@ export const config = Object.freeze({
     jsonBodyLimit: '256kb',
     chatQuestionMaxChars: num('CHAT_QUESTION_MAX_CHARS', 2000, { min: 1, max: 20000 }),
     maxQuizQuestions: num('MAX_QUIZ_QUESTIONS', 20, { min: 1, max: 50 }),
+    maxFlashcards: num('MAX_FLASHCARDS', 20, { min: 1, max: 50 }),
     maxChatMessagesPerSession: num('MAX_CHAT_MESSAGES', 200, { min: 1, max: 5000 }),
+  },
+
+  auth: {
+    mode: authMode,
+    sessionTtlDays: num('SESSION_TTL_DAYS', 14, { min: 1, max: 90 }),
+    cookieName: 'ls_session',
+    resetTokenTtlMinutes: num('AUTH_RESET_TTL_MINUTES', 30, { min: 5, max: 120 }),
+    // No email provider is bundled. On non-production deployments the reset
+    // token is returned to the page so the flow can actually be completed;
+    // production returns the same generic answer and logs nothing sensitive.
+    // Set AUTH_DEV_RESET=0 to hide even the development token.
+    devReset: str('AUTH_DEV_RESET') === '0' ? false : envName !== 'production',
+    resetEmailConfigured: Boolean(str('AUTH_RESET_EMAIL')),
   },
 
   ai,
@@ -225,12 +271,26 @@ export const config = Object.freeze({
         missingEnvVars: this.ai.missing,
       },
       retrieval: { topK: this.retrieval.topK, minScore: this.retrieval.minScore },
+      auth: {
+        mode: this.auth.mode,
+        passwordReset: {
+          emailConfigured: this.auth.resetEmailConfigured,
+          // True only where the server deliberately shows the one-time token.
+          devToken: this.auth.devReset,
+        },
+        // True only when the server verifies identity. The UI uses this to
+        // decide between "sign in" and the profile switcher, and must never
+        // present a profile id as an account.
+        accounts: this.auth.mode !== 'local',
+        sessionTtlDays: this.auth.sessionTtlDays,
+      },
       limits: {
         maxUploadBytes: this.upload.maxBytes,
         maxDocuments: this.upload.maxDocuments,
         maxFilesPerUpload: this.upload.maxFilesPerRequest,
         allowedExtensions: this.upload.allowedExtensions,
         maxQuizQuestions: this.limits.maxQuizQuestions,
+        maxFlashcards: this.limits.maxFlashcards,
         chatQuestionMaxChars: this.limits.chatQuestionMaxChars,
       },
     };

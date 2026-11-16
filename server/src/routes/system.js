@@ -34,17 +34,30 @@ export function systemRouter({ store, retrieval, teacher, config, startedAt = Da
         mode: config.ai.configured ? 'live' : 'demo',
         missingEnvVars: config.ai.missing,
       },
+      auth: {
+        mode: config.auth.mode,
+        // Never the email or any token: this endpoint is public.
+        authenticated: Boolean(req.auth?.authenticated),
+      },
       learner: {
         id: req.learnerId,
         scopingNote:
-          'The learner id is client-asserted and scopes data ownership. It is not authentication and does not secure a shared deployment.',
+          config.auth.mode === 'local'
+            ? 'The study profile is asserted by the browser and only scopes data ownership. It is not authentication; use AUTH_MODE=required with an account before exposing this deployment.'
+            : 'The study profile is the signed-in account id, verified on the server from an HttpOnly session cookie.',
       },
       store: storeStats,
       retrieval: retrievalStats,
-      notes: [
-        'No authentication is enabled in this build.',
-        'Storage is local disk, not multi-tenant cloud storage.',
-      ],
+      notes:
+        config.auth.mode === 'local'
+          ? [
+              'Authentication is off (AUTH_MODE=local): data is scoped by a browser-asserted study profile, which is a demo mode, not access control.',
+              'Storage is local disk, not multi-tenant cloud storage.',
+            ]
+          : [
+              'Accounts are required (AUTH_MODE=required): every /api route except health, config and auth needs a valid session.',
+              'Storage is local disk. A single instance with a persistent disk is supported; multiple instances need shared storage and a shared rate-limit store.',
+            ],
     });
   });
 

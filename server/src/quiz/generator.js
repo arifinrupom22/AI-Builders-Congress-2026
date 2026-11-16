@@ -122,8 +122,17 @@ const CLAUSE_INITIAL_WORDS = new Set([
 export function extractDefinitions(passages) {
   const found = [];
   for (const passage of passages) {
+    const heading = passage.heading ? String(passage.heading).replace(/\s+/g, ' ').trim() : '';
     for (const raw of splitSentences(passage.text)) {
-      const sentence = raw.replace(/\s+/g, ' ').trim();
+      let sentence = raw.replace(/\s+/g, ' ').trim();
+      // A title line usually has no full stop, so it arrives fused to the first
+      // real sentence: "Photosynthesis - lecture notes Photosynthesis is the
+      // process...". Strip the title before matching, or the term becomes the
+      // title and the question reads as nonsense.
+      if (heading && sentence.toLowerCase().startsWith(heading.toLowerCase())) {
+        const rest = sentence.slice(heading.length).replace(/^[\s:\u2013\u2014-]+/, '').trim();
+        if (rest.length >= 45) sentence = rest;
+      }
       if (sentence.length < 45 || sentence.length > 420) continue;
       const match = matchDefinition(sentence);
       if (!match) continue;
@@ -284,7 +293,18 @@ function buildSentenceQuestion({ passage, pool, index, rng, language = 'en' }) {
  * Deterministic grounded quiz builder.
  * @returns {{questions:object[], reason:string|null}}
  */
-export function buildDeterministicQuiz({ passages, questionCount, seedText, language = 'en' }) {
+/**
+ * The question styles this generator can actually produce, grounded:
+ *
+ *   recall - definition questions only ("what does X mean?").
+ *   mixed  - definitions plus statement-recognition questions drawn from the
+ *            same passages. Nothing is phrased as an application or scenario
+ *            question, because the material cannot support one without
+ *            inventing the scenario.
+ */
+export const QUIZ_STYLES = ['recall', 'mixed'];
+
+export function buildDeterministicQuiz({ passages, questionCount, seedText, language = 'en', style = 'mixed' }) {
   const rng = mulberry32(seedFrom(seedText));
   const definitions = extractDefinitions(passages);
   const questions = [];
@@ -325,8 +345,10 @@ export function buildDeterministicQuiz({ passages, questionCount, seedText, lang
     }
   }
 
-  // Top up with sentence-recognition questions if definitions ran out.
-  if (questions.length < questionCount) {
+  // Top up with sentence-recognition questions if definitions ran out. A
+  // recall drill deliberately stops at definitions so the learner meets the
+  // concept again before anything that asks them to recognise source text.
+  if (style !== 'recall' && questions.length < questionCount) {
     const usable = passages.filter((p) => !screenPassage(p.text).suspicious);
     for (let i = 0; i < usable.length && questions.length < questionCount; i += 1) {
       const question = buildSentenceQuestion({
@@ -375,6 +397,72 @@ function parseJsonFromModel(text) {
   }
 }
 
+function gapSourceOf(passage) {
+  return {
+    materialId: passage.materialId ?? null,
+    documentName: passage.documentName ?? null,
+    pageNumber: passage.pageNumber ?? null,
+    passageId: passage.passageId ?? passage.id ?? null,
+  };
+}
+
+/**
+ * A short, quoted explanation for a concept, taken from the learner's own
+ * passages. Prefers a definition sentence naming the concept, then any sentence
+ * that names it, then the first substantive sentence of the concept's passage.
+ * Returns null rather than paraphrasing when the passages have no usable text.
+ */
+export function buildGapExplanation({ passages, concept }) {
+  if (!passages || passages.length === 0) return null;
+  const key = String(concept ?? '').toLowerCase();
+
+  const definitions = extractDefinitions(passages);
+  const match =
+    definitions.find((d) => key && (key.includes(d.term.toLowerCase()) || d.term.toLowerCase().includes(key))) ??
+    definitions[0] ??
+    null;
+  if (match) {
+    return { text: clip(match.definition, 320), source: gapSourceOf(match) };
+  }
+
+  for (const passage of passages) {
+    const sentence = splitSentences(passage.text ?? '')
+      .map((part) => part.replace(/\s+/g, ' ').trim())
+      .find((part) => part.length >= 40 && key && part.toLowerCase().includes(key));
+    if (sentence) return { text: clip(sentence, 320), source: gapSourceOf(passage) };
+  }
+
+  const first = splitSentences(passages[0].text ?? '')
+    .map((part) => part.replace(/\s+/g, ' ').trim())
+    .find((part) => part.length >= 40);
+  return first ? { text: clip(first, 320), source: gapSourceOf(passages[0]) } : null;
+}
+
+const CONFIDENCE_NOTES = {
+  guessed:
+    'You reported guessing. That is supporting context only — a guess is not proof of a misconception, and it does not change the explanation above.',
+  unsure:
+    'You reported being unsure. That is supporting context only; the explanation above comes from your material, not from how confident you felt.',
+  confident:
+    'You reported being confident. Confidence is recorded as context only and is not treated as proof that you understood or misunderstood the concept.',
+};
+
+/**
+ * Echo the learner's optional confidence report as context. It never changes
+ * the explanation, the follow-up question, or the verdict, because confidence
+ * is not evidence of what someone does or does not understand.
+ */
+export function confidenceContext(level) {
+  const value = level ?? null;
+  return {
+    level: value,
+    note:
+      value && CONFIDENCE_NOTES[value]
+        ? CONFIDENCE_NOTES[value]
+        : 'Confidence was not reported. It is optional, and would only ever be supporting context — not evidence of a misconception.',
+  };
+}
+
 export function createQuizService({ retrieval, provider, config, logger, store }) {
   const providerInfo = provider ? { id: provider.id, label: provider.label, model: provider.model } : null;
 
@@ -399,7 +487,16 @@ export function createQuizService({ retrieval, provider, config, logger, store }
     return retrieval.allPassages(learnerId, materialIds);
   }
 
-  async function generate({ learnerId, materialIds = null, topic = '', questionCount, language = null }) {
+  async function generate({
+    learnerId,
+    materialIds = null,
+    topic = '',
+    questionCount,
+    language = null,
+    style = 'mixed',
+    timeLimitSeconds = null,
+  }) {
+    const resolvedStyle = QUIZ_STYLES.includes(style) ? style : 'mixed';
     const count = Math.max(1, Math.min(questionCount ?? 5, config.limits.maxQuizQuestions));
     const passages = await selectPassages({ learnerId, materialIds, topic });
 
@@ -424,7 +521,7 @@ export function createQuizService({ retrieval, provider, config, logger, store }
     let fallback = null;
     const warnings = [];
 
-    if (provider) {
+    if (provider && resolvedStyle === 'mixed') {
       try {
         // Keep the prompt bounded: multi-question quizzes need breadth, not depth.
         const contextPassages = passages.slice(0, 14).map((p, i) => ({
@@ -506,10 +603,21 @@ export function createQuizService({ retrieval, provider, config, logger, store }
     }
 
     if (questions.length === 0) {
-      const local = buildDeterministicQuiz({ passages, questionCount: count, seedText: quizId, language: lang });
+      const local = buildDeterministicQuiz({
+        passages,
+        questionCount: count,
+        seedText: quizId,
+        language: lang,
+        style: resolvedStyle,
+      });
       questions = local.questions;
       generationMode = 'demo';
-      if (local.reason) warnings.push({ code: 'partial_quiz', message: local.reason });
+      if (local.reason) {
+        warnings.push({
+          code: resolvedStyle === 'recall' ? 'partial_recall_set' : 'partial_quiz',
+          message: local.reason,
+        });
+      }
     }
 
     if (questions.length === 0) {
@@ -532,6 +640,11 @@ export function createQuizService({ retrieval, provider, config, logger, store }
       generationMode,
       provider: providerInfo,
       language: lang,
+      style: resolvedStyle,
+      // Optional study timer (seconds). Stored so a reopened quiz keeps the same
+      // limit. It is a self-study aid, not proctoring: the server never refuses
+      // a late submission, and the UI states how much of the limit was used.
+      timeLimitSeconds: Number.isFinite(timeLimitSeconds) && timeLimitSeconds > 0 ? Math.round(timeLimitSeconds) : null,
       createdAt: new Date().toISOString(),
     };
 
@@ -550,7 +663,160 @@ export function createQuizService({ retrieval, provider, config, logger, store }
     };
   }
 
-  return { generate, selectPassages, providerInfo };
+  /**
+   * Concept-level feedback for ONE wrong answer.
+   *
+   * This is deliberately not a diagnosis. It reports the concept the question
+   * belonged to, quotes a cited explanation from the learner's own material,
+   * and offers a single follow-up question on the same concept. Where that
+   * follow-up cannot be grounded, it says so and points at the passage instead
+   * of inventing a cause.
+   *
+   * `confidence` is accepted from the learner and echoed as context only: it
+   * never changes the explanation and is never treated as proof of a
+   * misconception.
+   */
+  async function diagnose({ learnerId, quizId, questionId, confidence = null }) {
+    const quiz = await store.getQuiz(quizId, learnerId);
+    if (!quiz) return { ok: false, code: 'not_found', message: 'That quiz was not found.' };
+
+    const question = quiz.questions.find((q) => q.id === questionId);
+    if (!question) {
+      return { ok: false, code: 'question_not_found', message: 'That question is not part of this quiz.' };
+    }
+
+    // Feedback exists only after the quiz was submitted, and only for a wrong
+    // answer that was actually given. Answers and explanations are never
+    // released for a question the learner has not answered.
+    const attempts = await store.listAttempts(learnerId, { limit: 500 });
+    const attempt = attempts.find((a) => a.quizId === quizId);
+    if (!attempt) {
+      return { ok: false, code: 'not_attempted', message: 'Submit this quiz before asking for gap feedback.' };
+    }
+    const result = (attempt.results ?? []).find((r) => r.questionId === questionId) ?? null;
+    if (!result) {
+      return { ok: false, code: 'question_not_found', message: 'That question was not part of the submitted attempt.' };
+    }
+    if (result.skipped) {
+      return {
+        ok: false,
+        code: 'not_answered',
+        message: 'This question was left blank, so there is no wrong answer to explain. Review the passage below.',
+        review: question.source ?? null,
+      };
+    }
+    if (result.correct) {
+      return {
+        ok: false,
+        code: 'answered_correctly',
+        message: 'This question was answered correctly — there is no gap to investigate.',
+      };
+    }
+
+    const concept = question.topic || question.source?.documentName || 'General';
+
+    // --- evidence on this concept, across the learner's real attempts -------
+    let answersOnConcept = 0;
+    let correctOnConcept = 0;
+    for (const past of attempts) {
+      for (const item of past.results ?? []) {
+        const topic = item.topic || item.source?.documentName || 'General';
+        if (topic !== concept || item.skipped) continue;
+        answersOnConcept += 1;
+        if (item.correct) correctOnConcept += 1;
+      }
+    }
+    const firstRecorded = answersOnConcept <= 1;
+    const basisNote = firstRecorded
+      ? 'This is the first recorded answer on this concept, and a single wrong answer is not a diagnosis — it can be a misread, a guess, or a gap. The follow-up question is how to tell the difference.'
+      : `You have answered ${answersOnConcept} questions on this concept and ${correctOnConcept} of them correctly. This panel explains this one miss; it is not a diagnosis of what you do or do not understand.`;
+
+    // --- passages for the concept, from the same material as the quiz ------
+    const materialIds = quiz.materialIds ?? null;
+    const search = await retrieval.search({
+      learnerId,
+      query: concept,
+      materialIds,
+      topK: 8,
+      // The concept is a heading or document name, so be permissive about the
+      // score: any real passage is better than declaring a gap unknowable
+      // because a heading matched loosely.
+      minScore: Math.min(config.retrieval.minScore, 0.2),
+    });
+    let passages = search.supported ? search.results : [];
+    if (passages.length === 0) {
+      const all = await retrieval.allPassages(learnerId, materialIds);
+      passages = all.filter((p) => (p.passageId ?? p.id) === question.source?.passageId);
+      if (passages.length === 0) passages = all.slice(0, 3);
+    }
+
+    const review = question.source
+      ? {
+          materialId: question.source.materialId ?? null,
+          documentName: question.source.documentName ?? null,
+          pageNumber: question.source.pageNumber ?? null,
+          passageId: question.source.passageId ?? null,
+        }
+      : null;
+
+    // --- short cited explanation ------------------------------------------ 
+    const explanation = buildGapExplanation({ passages, concept });
+
+    // --- one follow-up diagnostic question ---------------------------------
+    let diagnostic = null;
+    let unsupportedReason = null;
+    if (passages.length === 0) {
+      unsupportedReason = 'No passage for this concept could be found in the material of this quiz, so a follow-up question cannot be grounded.';
+    } else {
+      const language = quiz.language ?? detectLanguage(passages[0].text.slice(0, 200));
+      const built = buildDeterministicQuiz({
+        passages,
+        questionCount: 10,
+        // Deterministic: asking again (for example after reporting confidence)
+        // returns the same follow-up question.
+        seedText: `gap:${quiz.id}:${question.id}`,
+        language,
+      });
+      const candidates = (built.questions ?? []).filter(
+        (candidate) => candidate.prompt !== question.prompt && candidate.options?.length >= 2,
+      );
+      diagnostic = candidates[0] ?? null;
+      if (!diagnostic) {
+        unsupportedReason =
+          built.reason ??
+          'Your material does not contain a second grounded question about this concept, so no follow-up can be asked without inventing one.';
+      }
+    }
+
+    const supported = Boolean(explanation && diagnostic);
+
+    return {
+      ok: true,
+      gap: {
+        questionId,
+        concept,
+        status: supported ? 'supported' : 'insufficient',
+        reason: supported
+          ? null
+          : unsupportedReason ??
+            'There is not enough in your material to attach a grounded explanation to this miss, so the cause cannot be identified.',
+        explanation,
+        diagnostic,
+        review,
+        context: {
+          answersOnConcept,
+          correctOnConcept,
+          firstRecorded,
+          note: basisNote,
+        },
+        confidence: confidenceContext(confidence),
+        disclaimer:
+          'This feedback is built from your uploaded material. It explains one wrong answer and is not a diagnosis, a mastery judgement, or a measure of ability.',
+      },
+    };
+  }
+
+  return { generate, selectPassages, diagnose, providerInfo };
 }
 
 export default createQuizService;

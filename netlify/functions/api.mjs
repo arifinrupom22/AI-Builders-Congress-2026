@@ -32,8 +32,18 @@ const DEFAULT_BACKEND_URL = 'https://ai-builders-congress-2026.onrender.com';
  * to give up first and answer with something the UI can explain. Render's free
  * tier can take ~30s to wake a sleeping instance, which is why the reply is
  * marked retryable: the client retries a few times instead of showing a dead end.
+ *
+ * The timeout is configurable but capped below Netlify's hard limit: a value
+ * that cannot complete is worse than a clear, retryable timeout. Long AI
+ * generations that outlast this budget therefore surface as `backend_timeout`;
+ * retrying is safe because the API persists nothing until a request succeeds
+ * (a quiz, attempt or chat message is only written after the answer exists).
  */
-const UPSTREAM_TIMEOUT_MS = 9000;
+const MAX_UPSTREAM_TIMEOUT_MS = 9000;
+const configuredTimeout = Number.parseInt(process.env.LEARNSPHERE_PROXY_TIMEOUT_MS ?? '', 10);
+const UPSTREAM_TIMEOUT_MS = Number.isFinite(configuredTimeout)
+  ? Math.min(Math.max(configuredTimeout, 1000), MAX_UPSTREAM_TIMEOUT_MS)
+  : MAX_UPSTREAM_TIMEOUT_MS;
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };
 

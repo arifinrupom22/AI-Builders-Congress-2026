@@ -10,6 +10,8 @@ import { useEffect, useState } from 'react';
 import { useApp } from '../store/AppContext.jsx';
 import { Icon } from '../components/Icons.jsx';
 import { Alert, Badge, Button, Card, ErrorPanel, Field, StatTile } from '../components/ui.jsx';
+import { PreferencesControls } from '../components/PublicChrome.jsx';
+import { api } from '../lib/api.js';
 import { formatBytes, formatNumber, pluralise } from '../lib/format.js';
 
 const PROVIDER_IDS = ['none', 'groq', 'gemini', 'openrouter', 'mistral', 'cloudflare', 'custom'];
@@ -65,16 +67,275 @@ function StudyProfileCard() {
       <Alert tone="warning" title="This is not authentication">
         <p>
           The profile id is asserted by this browser and used only to scope which rows the server reads
-          and writes. It does not protect data from anyone else who can reach the server. Add real signed-in
-          accounts before exposing LearnSphere AI to a network.
+          and writes. It does not protect data from anyone else who can reach the server. This deployment runs
+          with <code className="md-code">AUTH_MODE=local</code>; set <code className="md-code">AUTH_MODE=required</code>
+          {' '}to require server-verified accounts instead.
         </p>
       </Alert>
     </Card>
   );
 }
 
+/** Shown only when the server verifies identity (AUTH_MODE=required). */
+function AccountCard() {
+  const { auth, signOut, notify } = useApp();
+  const [busy, setBusy] = useState(false);
+  const user = auth?.user;
+  if (!user) return null;
+
+  return (
+    <Card title="Account" subtitle="Documents, quizzes, sessions, flashcards and plans are scoped to this verified account.">
+      <div className="kv-grid kv-grid--three">
+        <div className="kv">
+          <span className="kv__k">Email</span>
+          <span className="kv__v">{user.email}</span>
+        </div>
+        <div className="kv">
+          <span className="kv__k">Display name</span>
+          <span className="kv__v">{user.displayName || '—'}</span>
+        </div>
+        <div className="kv">
+          <span className="kv__k">Identity</span>
+          <span className="kv__v">
+            <Badge tone="success" icon="shield">
+              Server-verified session
+            </Badge>
+          </span>
+        </div>
+      </div>
+      <div className="row-actions">
+        <Button
+          variant="ghost"
+          icon="user"
+          loading={busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await signOut();
+            } catch (err) {
+              notify(err.message ?? 'Could not sign out.', 'error');
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          Sign out
+        </Button>
+        <span className="muted-xs">
+          The session cookie is HttpOnly and SameSite=Lax. Signing out deletes the session on the server.
+        </span>
+      </div>
+    </Card>
+  );
+}
+
+function PreferencesCard() {
+  const { t } = useApp();
+  return (
+    <Card title={t('settings.appearance')} subtitle={t('settings.appearanceHint')}>
+      <PreferencesControls />
+    </Card>
+  );
+}
+
+/** Study preferences stored on the verified account. */
+function ProfileDetailsCard() {
+  const { auth, updateProfile, notify, t } = useApp();
+  const profile = auth?.user?.profile ?? {};
+  const [level, setLevel] = useState(profile.level ?? '');
+  const [subjects, setSubjects] = useState((profile.subjects ?? []).join(', '));
+  const [examDate, setExamDate] = useState(profile.examDate ?? '');
+  const [minutes, setMinutes] = useState(profile.minutesPerDay ?? '');
+  const [days, setDays] = useState(profile.daysPerWeek ?? '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  if (!auth?.user) return null;
+
+  async function save(patch) {
+    setBusy(true);
+    setError(null);
+    try {
+      await updateProfile(patch);
+      notify('Study profile saved.', 'success');
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card title={t('settings.profile')} subtitle={`${auth.user.email} · ${auth.user.displayName}`}>
+      {error ? <ErrorPanel error={error} title="Could not save" /> : null}
+      <div className="settings-grid">
+        <Field label={t('onboard.level')}>
+          {({ id, ...aria }) => (
+            <select id={id} className="ls-input" value={level} onChange={(event) => setLevel(event.target.value)} {...aria}>
+              <option value="">{t('onboard.levelNone')}</option>
+              <option value="school">{t('onboard.levelSchool')}</option>
+              <option value="college">{t('onboard.levelCollege')}</option>
+              <option value="undergraduate">{t('onboard.levelUndergrad')}</option>
+              <option value="postgraduate">{t('onboard.levelPostgrad')}</option>
+              <option value="self-taught">{t('onboard.levelSelf')}</option>
+              <option value="other">{t('onboard.levelOther')}</option>
+            </select>
+          )}
+        </Field>
+        <Field label={t('onboard.subjects')} hint={t('onboard.subjectsHint')}>
+          {({ id, ...aria }) => (
+            <input id={id} className="ls-input" type="text" value={subjects} onChange={(event) => setSubjects(event.target.value)} {...aria} />
+          )}
+        </Field>
+        <Field label={t('onboard.examDate')} hint={t('onboard.examDateHint')}>
+          {({ id, ...aria }) => (
+            <input id={id} className="ls-input" type="date" value={examDate} onChange={(event) => setExamDate(event.target.value)} {...aria} />
+          )}
+        </Field>
+        <Field label={t('onboard.minutes')}>
+          {({ id, ...aria }) => (
+            <input id={id} className="ls-input" type="number" min={5} max={600} step={5} value={minutes} onChange={(event) => setMinutes(event.target.value)} {...aria} />
+          )}
+        </Field>
+        <Field label={t('onboard.days')}>
+          {({ id, ...aria }) => (
+            <input id={id} className="ls-input" type="number" min={1} max={7} value={days} onChange={(event) => setDays(event.target.value)} {...aria} />
+          )}
+        </Field>
+      </div>
+      <div className="row-actions">
+        <Button
+          icon="check"
+          loading={busy}
+          onClick={() =>
+            save({
+              level: level || null,
+              subjects: subjects.split(',').map((s) => s.trim()).filter(Boolean),
+              examDate: examDate || null,
+              minutesPerDay: minutes ? Number(minutes) : null,
+              daysPerWeek: days ? Number(days) : null,
+            })
+          }
+        >
+          {busy ? t('common.saving') : t('common.save')}
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+/** Export and deletion, available in every mode. */
+function DataRightsCard() {
+  const { auth, deleteAccount, notify, t } = useApp();
+  const account = Boolean(auth?.user);
+  const [exporting, setExporting] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function download() {
+    setExporting(true);
+    setError(null);
+    try {
+      const data = await api.exportAccount();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `learnsphere-export-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      notify('Export downloaded.', 'success');
+    } catch (err) {
+      setError(err);
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function remove() {
+    const ready = account ? password.length > 0 : confirmText === 'DELETE';
+    if (!ready || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await deleteAccount(account ? { password } : { confirm: 'DELETE' });
+      notify(t('settings.deleted'), 'success');
+      window.location.hash = '#/login';
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card title="Export and deletion" subtitle={t('settings.deleteHint')}>
+      {error ? <ErrorPanel error={error} title="Could not complete that request" /> : null}
+
+      <div className="stack">
+        <div>
+          <h3 className="subhead">{t('settings.export')}</h3>
+          <p className="muted">{t('settings.exportHint')}</p>
+          <Button variant="secondary" icon="download" loading={exporting} onClick={download}>
+            {t('settings.exportButton')}
+          </Button>
+        </div>
+
+        <hr className="auth__divider" />
+
+        <div>
+          <h3 className="subhead">{t('settings.deleteTitle')}</h3>
+          {account ? (
+            <Field label={t('settings.deletePassword')} hint="Your password is checked on the server before anything is removed.">
+              {({ id, ...aria }) => (
+                <input
+                  id={id}
+                  className="ls-input"
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  {...aria}
+                />
+              )}
+            </Field>
+          ) : (
+            <Field label={t('settings.deleteConfirm')}>
+              {({ id, ...aria }) => (
+                <input
+                  id={id}
+                  className="ls-input"
+                  type="text"
+                  value={confirmText}
+                  onChange={(event) => setConfirmText(event.target.value)}
+                  {...aria}
+                />
+              )}
+            </Field>
+          )}
+          <div className="row-actions">
+            <Button
+              variant="ghost"
+              icon="trash"
+              loading={busy}
+              disabled={account ? password.length === 0 : confirmText !== 'DELETE'}
+              onClick={remove}
+            >
+              {account ? t('settings.deleteButton') : t('settings.deleteDemoButton')}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 export default function SettingsPage() {
-  const { ai, config, health, materials, reload, notify, learnerId } = useApp();
+  const { ai, config, health, materials, reload, notify, learnerId, auth } = useApp();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
@@ -172,7 +433,10 @@ export default function SettingsPage() {
         </p>
       </Card>
 
-      <StudyProfileCard />
+      {config?.auth?.accounts ? <AccountCard /> : <StudyProfileCard />}
+      {config?.auth?.accounts ? <ProfileDetailsCard /> : null}
+      <PreferencesCard />
+      <DataRightsCard />
 
       <Card title="Retrieval and limits" subtitle="What the server enforces for this profile.">
         <div className="kv-grid kv-grid--three">
@@ -249,7 +513,7 @@ export default function SettingsPage() {
           </div>
           <div className="kv">
             <span className="kv__k">Study profile</span>
-            <span className="kv__v">{learnerId}</span>
+            <span className="kv__v">{auth?.user?.email ?? learnerId}</span>
           </div>
           <div className="kv">
             <span className="kv__k">Indexed documents</span>

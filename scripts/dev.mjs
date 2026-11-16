@@ -6,8 +6,17 @@ import { createInterface } from 'node:readline';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const children = new Set();
-const requestedApiPort = Number.parseInt(process.env.PORT ?? '8787', 10);
-const requestedWebPort = Number.parseInt(process.env.VITE_PORT ?? '5173', 10);
+
+// A port must be a real listening port. Hosts and shells routinely export
+// PORT=0 to mean "any free port"; accepting it produced a Vite proxy pointed at
+// http://localhost:0, so the page loaded while every /api call failed with 502.
+function parsePort(raw, fallback) {
+  const value = Number.parseInt(raw ?? '', 10);
+  return Number.isInteger(value) && value >= 1 && value <= 65535 ? value : fallback;
+}
+
+const requestedApiPort = parsePort(process.env.PORT, 8787);
+const requestedWebPort = parsePort(process.env.VITE_PORT, 5173);
 let stopping = false;
 let webStarted = false;
 
@@ -77,7 +86,7 @@ function launchWeb(apiPort) {
     path.join(projectRoot, 'web'),
     {
       ...process.env,
-      VITE_PORT: String(Number.isInteger(requestedWebPort) ? requestedWebPort : 5173),
+      VITE_PORT: String(requestedWebPort),
       VITE_API_TARGET: `http://localhost:${apiPort}`,
     },
     (line) => {
@@ -134,7 +143,7 @@ async function launchBackend(startPort) {
 process.once('SIGINT', () => stop('SIGINT', 0));
 process.once('SIGTERM', () => stop('SIGTERM', 0));
 
-const firstApiPort = Number.isInteger(requestedApiPort) ? requestedApiPort : 8787;
+const firstApiPort = requestedApiPort;
 console.log(`[dev] Starting backend from port ${firstApiPort}.`);
 void launchBackend(firstApiPort).catch((error) => {
   console.error(`[dev] ${error.message}`);

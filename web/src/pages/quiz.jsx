@@ -6,7 +6,7 @@
  * in the browser. Skipped questions are scored as incorrect, which the UI says
  * out loud rather than hiding.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api.js';
 import { useApp } from '../store/AppContext.jsx';
 import { Icon } from '../components/Icons.jsx';
@@ -27,11 +27,30 @@ import { formatPercent, formatRelative, pluralise, truncate } from '../lib/forma
 
 const OPTION_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F'];
 
-function GeneratorForm({ limits, materials, onGenerated, onError, busy, setBusy }) {
-  const [topic, setTopic] = useState('');
+const STYLE_OPTIONS = [
+  { id: 'mixed', label: 'Mixed — definitions plus source recognition' },
+  { id: 'recall', label: 'Basic recall — definitions only' },
+];
+
+function GeneratorForm({
+  limits,
+  materials,
+  onGenerated,
+  onError,
+  busy,
+  setBusy,
+  initialTopic = '',
+  initialStyle = 'mixed',
+  initialMaterials = [],
+}) {
+  const [topic, setTopic] = useState(initialTopic);
   const [count, setCount] = useState(5);
+  const [style, setStyle] = useState(initialStyle === 'recall' ? 'recall' : 'mixed');
   const [language, setLanguage] = useState('auto');
-  const [scope, setScope] = useState([]);
+  const [timeLimit, setTimeLimit] = useState('0');
+  const [scope, setScope] = useState(() =>
+    initialMaterials.filter((id) => materials.some((material) => material.id === id)),
+  );
 
   const maxQuestions = limits?.maxQuizQuestions ?? 20;
 
@@ -45,6 +64,8 @@ function GeneratorForm({ limits, materials, onGenerated, onError, busy, setBusy 
         questionCount: Number(count),
         materialIds: scope.length ? scope : null,
         language: language === 'auto' ? null : language,
+        style,
+        timeLimitMinutes: Number(timeLimit) > 0 ? Number(timeLimit) : null,
       });
       onGenerated(result);
     } catch (err) {
@@ -81,12 +102,45 @@ function GeneratorForm({ limits, materials, onGenerated, onError, busy, setBusy 
               </select>
             )}
           </Field>
-          <Field label="Language" hint="By default the quiz is written in the language your material is written in.">
+          <Field
+              label="Question style"
+              hint={
+                style === 'recall'
+                  ? 'Every question asks what a concept in your material means. Built locally from definitions — no AI model is used for a recall drill.'
+                  : 'Definitions plus recognising statements from your material.'
+              }
+            >
+              {({ id }) => (
+                <select id={id} className="ls-input" value={style} onChange={(e) => setStyle(e.target.value)}>
+                  {STYLE_OPTIONS.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </Field>
+            <Field label="Language" hint="By default the quiz is written in the language your material is written in.">
             {({ id }) => (
               <select id={id} className="ls-input" value={language} onChange={(e) => setLanguage(e.target.value)}>
                 <option value="auto">Follow the material</option>
                 <option value="en">English</option>
                 <option value="bn">বাংলা (Bangla)</option>
+              </select>
+            )}
+          </Field>
+          <Field
+            label="Study timer"
+            hint="Optional. A timer in this tab, not invigilation: the answers stay hidden until you submit, and a late submission is still scored normally."
+          >
+            {({ id }) => (
+              <select id={id} className="ls-input" value={timeLimit} onChange={(e) => setTimeLimit(e.target.value)}>
+                <option value="0">Untimed practice</option>
+                <option value="5">5 minutes</option>
+                <option value="10">10 minutes</option>
+                <option value="15">15 minutes</option>
+                <option value="20">20 minutes</option>
+                <option value="30">30 minutes</option>
               </select>
             )}
           </Field>
@@ -136,6 +190,15 @@ function GenerationNotices({ meta, mode }) {
         </Alert>
       ) : null}
 
+      {meta?.style === 'recall' ? (
+        <Alert tone="info" title="Basic recall drill">
+          <p>
+            Every question asks what a concept in your material means. This drill is built locally from definitions in
+            your documents; no AI model is used for it.
+          </p>
+        </Alert>
+      ) : null}
+
       {meta?.provenance ? <p className="muted-xs">{meta.provenance}</p> : null}
 
       {generationMode ? (
@@ -149,12 +212,47 @@ function GenerationNotices({ meta, mode }) {
   );
 }
 
+const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+
 function QuizRunner({ quiz, onSubmit, submitting }) {
   const [answers, setAnswers] = useState(() => Array(quiz.questions.length).fill(null));
   const answeredCount = answers.filter((a) => a !== null).length;
+  const limit = quiz.timeLimitSeconds ?? null;
+  const [elapsed, setElapsed] = useState(0);
+  const [announcement, setAnnouncement] = useState('');
+  const sent = useRef(false);
+  const answersRef = useRef(answers);
+  answersRef.current = answers;
 
   const select = (index, optionIndex) => {
     setAnswers((list) => list.map((value, i) => (i === index ? optionIndex : value)));
+  };
+
+  // A tab-local timer. It pauses when this tab is closed; that is stated in the
+  // UI rather than pretending it is an invigilated countdown.
+  useEffect(() => {
+    if (!limit) return undefined;
+    const id = window.setInterval(() => setElapsed((value) => value + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [limit]);
+
+  const remaining = limit ? Math.max(0, limit - elapsed) : null;
+
+  useEffect(() => {
+    if (!limit) return;
+    if (remaining === 60) setAnnouncement('One minute left on your study timer.');
+    if (remaining === 10) setAnnouncement('Ten seconds left on your study timer.');
+    if (remaining === 0 && !sent.current) {
+      sent.current = true;
+      setAnnouncement('Time is up. Your answers were submitted.');
+      onSubmit(answersRef.current, elapsed, { auto: true });
+    }
+  }, [remaining, limit, elapsed, onSubmit]);
+
+  const submitNow = () => {
+    if (sent.current) return;
+    sent.current = true;
+    onSubmit(answers, elapsed, { auto: false });
   };
 
   return (
@@ -168,7 +266,21 @@ function QuizRunner({ quiz, onSubmit, submitting }) {
           <span className="muted-xs">
             {answeredCount} of {quiz.questions.length} answered
           </span>
+          {limit ? (
+            <span className={`quiz-timer${remaining <= 60 ? ' quiz-timer--low' : ''}`} role="timer" aria-live="off">
+              <Icon name="clock" size={14} /> {clock(remaining)} left of {clock(limit)}
+            </span>
+          ) : null}
         </div>
+        {limit ? (
+          <p className="muted-xs quiz-timer__note">
+            The timer runs in this tab only and is a study aid, not invigilation. Answers stay hidden until you submit;
+            submitting after the timer still scores normally and is labelled as over time.
+          </p>
+        ) : null}
+        <span className="sr-only" role="status" aria-live="polite">
+          {announcement}
+        </span>
 
         <ol className="quiz-questions">
           {quiz.questions.map((question, index) => (
@@ -216,7 +328,7 @@ function QuizRunner({ quiz, onSubmit, submitting }) {
                 );
                 if (!proceed) return;
               }
-              onSubmit(answers);
+              submitNow();
             }}
           >
             Submit answers
@@ -228,8 +340,221 @@ function QuizRunner({ quiz, onSubmit, submitting }) {
   );
 }
 
+const CONFIDENCE_CHOICES = [
+  { id: 'guessed', label: 'I guessed' },
+  { id: 'unsure', label: 'Unsure' },
+  { id: 'confident', label: 'Confident' },
+];
+
+function GapSource({ source }) {
+  if (!source?.documentName) return null;
+  return (
+    <p className="gap-source">
+      <Icon name="quote" size={13} />
+      <a href={`#/materials?id=${encodeURIComponent(source.materialId ?? '')}`}>
+        {source.documentName}
+        {source.pageNumber ? ` · page ${source.pageNumber}` : ''}
+      </a>
+    </p>
+  );
+}
+
+/**
+ * Concept-level feedback for one wrong answer.
+ *
+ * It is fetched only for a wrong answer the learner actually gave, and only
+ * after the quiz was submitted. The server decides what the material supports:
+ * a cited explanation and one follow-up question where it can, and an honest
+ * "not enough evidence" with the passage to review where it cannot. Confidence
+ * is optional and shown as context — it never changes the feedback.
+ */
+function KnowledgeGap({ quizId, item }) {
+  const [open, setOpen] = useState(false);
+  const [gap, setGap] = useState(null);
+  const [state, setState] = useState('idle'); // idle | loading | ready | error
+  const [error, setError] = useState(null);
+  const [confidence, setConfidence] = useState(null);
+  const [selected, setSelected] = useState(null);
+
+  const load = useCallback(
+    async (level) => {
+      setState('loading');
+      setError(null);
+      try {
+        const data = await api.diagnoseGap(quizId, { questionId: item.questionId, confidence: level ?? null });
+        setGap(data.gap);
+        setState('ready');
+      } catch (err) {
+        setError(err);
+        setState('error');
+      }
+    },
+    [quizId, item.questionId],
+  );
+
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next && state === 'idle') load(null);
+  };
+
+  const reportConfidence = (level) => {
+    setConfidence(level);
+    load(level);
+  };
+
+  return (
+    <div className="gap">
+      <button
+        type="button"
+        className="gap-toggle"
+        onClick={toggle}
+        aria-expanded={open}
+        aria-controls={`gap-${item.questionId}`}
+      >
+        <Icon name="target" size={15} />
+        <span>Why did I miss this?</span>
+        <Icon name={open ? 'chevronDown' : 'chevronRight'} size={15} />
+      </button>
+
+      {open ? (
+        <div className="gap-panel" id={`gap-${item.questionId}`} role="region" aria-label="Knowledge gap feedback">
+          {state === 'loading' && !gap ? (
+            <p className="gap-note">Checking your material for this concept…</p>
+          ) : null}
+
+          {state === 'error' ? (
+            <Alert tone="warning" title="Could not build gap feedback">
+              <p>{error?.message ?? 'Try again in a moment.'}</p>
+              <div className="row-actions">
+                <Button variant="secondary" size="sm" icon="refresh" onClick={() => load(confidence)}>
+                  Try again
+                </Button>
+              </div>
+            </Alert>
+          ) : null}
+
+          {gap ? (
+            <>
+              <div className="gap-head">
+                <span className="gap-eyebrow">Concept connected to this miss</span>
+                <span className="gap-concept">{gap.concept}</span>
+              </div>
+
+              {gap.status === 'insufficient' ? (
+                <Alert tone="warning" title="Not enough evidence to identify a cause">
+                  <p>{gap.reason}</p>
+                  {gap.review?.documentName ? (
+                    <p>
+                      <a
+                        className="gap-link"
+                        href={`#/materials?id=${encodeURIComponent(gap.review.materialId ?? '')}`}
+                      >
+                        <Icon name="file" size={14} /> Review {gap.review.documentName}
+                        {gap.review.pageNumber ? ` · page ${gap.review.pageNumber}` : ''}
+                      </a>
+                    </p>
+                  ) : null}
+                </Alert>
+              ) : (
+                <>
+                  <p className="gap-explanation">
+                    <strong>From your material:</strong> {gap.explanation.text}
+                  </p>
+                  <GapSource source={gap.explanation.source} />
+
+                  <div className="gap-diagnostic">
+                    <span className="gap-eyebrow">One follow-up diagnostic question</span>
+                    <p className="gap-prompt">{gap.diagnostic.prompt}</p>
+                    <ul className="gap-options">
+                      {gap.diagnostic.options.map((option, index) => {
+                        const chosen = selected === index;
+                        const isAnswer = index === gap.diagnostic.answerIndex;
+                        const stateClass = chosen
+                          ? isAnswer
+                            ? 'is-correct'
+                            : 'is-wrong'
+                          : selected !== null && isAnswer
+                            ? 'is-correct'
+                            : '';
+                        return (
+                          <li key={`${item.questionId}-gap-${index}`}>
+                            <button
+                              type="button"
+                              className={`gap-option ${stateClass}`.trim()}
+                              aria-pressed={chosen}
+                              onClick={() => setSelected(index)}
+                            >
+                              <span className="gap-option__letter">{OPTION_LETTERS[index] ?? index + 1}</span>
+                              <span>{option}</span>
+                              {selected !== null && isAnswer ? <Icon name="check" size={15} /> : null}
+                              {chosen && !isAnswer ? <Icon name="close" size={15} /> : null}
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    {selected !== null ? (
+                      <p className="gap-answer-note">
+                        <strong>{selected === gap.diagnostic.answerIndex ? 'Correct.' : 'Not quite.'}</strong>{' '}
+                        {gap.diagnostic.explanation}
+                      </p>
+                    ) : (
+                      <p className="gap-note">
+                        Answer it to check yourself. This diagnostic is not scored and does not change your quiz result.
+                      </p>
+                    )}
+                    <GapSource source={gap.diagnostic.source} />
+                  </div>
+                </>
+              )}
+
+              <div className="gap-context">
+                <p className="gap-note">{gap.context.note}</p>
+                <p className="gap-note">{gap.confidence.note}</p>
+              </div>
+
+              <div className="gap-confidence">
+                <span className="gap-eyebrow">How confident were you in your answer? (optional)</span>
+                <div className="row-actions">
+                  {CONFIDENCE_CHOICES.map((choice) => (
+                    <button
+                      key={choice.id}
+                      type="button"
+                      className={`gap-confidence__choice${confidence === choice.id ? ' is-active' : ''}`}
+                      aria-pressed={confidence === choice.id}
+                      onClick={() => reportConfidence(choice.id)}
+                    >
+                      {choice.label}
+                    </button>
+                  ))}
+                  {confidence ? (
+                    <button
+                      type="button"
+                      className="gap-confidence__choice"
+                      onClick={() => reportConfidence(null)}
+                    >
+                      Prefer not to say
+                    </button>
+                  ) : null}
+                </div>
+                <p className="gap-note">
+                  Confidence is kept as context only. It is never treated as proof of a misconception.
+                </p>
+              </div>
+
+              <p className="gap-note gap-disclaimer">{gap.disclaimer}</p>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function Results({ quiz, result, onRetake, onNew }) {
-  const { score, results, topics, retryAdvice, scoringNote } = result;
+  const { score, results, topics, retryAdvice, scoringNote, timing } = result;
+  const minutes = timing?.elapsedSeconds != null ? clock(timing.elapsedSeconds) : null;
   const tone = score.percent >= 80 ? 'success' : score.percent >= 50 ? 'warning' : 'danger';
 
   return (
@@ -248,6 +573,14 @@ function Results({ quiz, result, onRetake, onNew }) {
               {score.answeredCount < score.total ? `, and left ${score.total - score.answeredCount} blank` : ''}.
             </p>
             <p className="muted-xs">{scoringNote}</p>
+            {timing?.timeLimitSeconds ? (
+              <p className="muted-xs">
+                Study timer: you used {minutes ?? 'an unknown time'} of the {clock(timing.timeLimitSeconds)} limit.
+                {timing.overLimit
+                  ? ' That is over the limit you set; the score is unaffected and this quiz was not invigilated.'
+                  : ' The timer never affects the score.'}
+              </p>
+            ) : null}
             <p className="quiz-score__advice">{retryAdvice}</p>
             <div className="row-actions">
               <Button variant="secondary" icon="refresh" onClick={onRetake}>
@@ -319,6 +652,9 @@ function Results({ quiz, result, onRetake, onNew }) {
                     {item.source.heading ? ` · ${truncate(item.source.heading, 70)}` : ''}
                   </p>
                 ) : null}
+
+                {/* Only a wrong answer the learner actually gave can open this. */}
+                {outcome === 'wrong' ? <KnowledgeGap quizId={quiz.id} item={item} /> : null}
               </li>
             );
           })}
@@ -328,7 +664,7 @@ function Results({ quiz, result, onRetake, onNew }) {
   );
 }
 
-export default function QuizPage() {
+export default function QuizPage({ route }) {
   const { materials, config, notify, learnerId } = useApp();
   const [quiz, setQuiz] = useState(null);
   const [meta, setMeta] = useState(null);
@@ -376,6 +712,13 @@ export default function QuizPage() {
           materials={materials}
           busy={busy}
           setBusy={setBusy}
+          // A link like #/quiz?topic=<concept> pre-fills the focus, which is
+          // how the Visual Study Studio offers "practise this concept".
+          initialTopic={route?.params?.get('topic') ?? ''}
+          initialStyle={route?.params?.get('style') ?? 'mixed'}
+          // A coach link may narrow the quiz to the documents it was recorded
+          // from, so its suggestion stays on the concept it named.
+          initialMaterials={(route?.params?.get('materials') ?? '').split(',').filter(Boolean)}
           onError={setError}
           onGenerated={(payload) => {
             setQuiz(payload.quiz);
@@ -384,6 +727,7 @@ export default function QuizPage() {
               fallback: payload.fallback ?? null,
               provenance: payload.provenance ?? null,
               generationMode: payload.generationMode ?? null,
+              style: payload.style ?? payload.quiz.style ?? 'mixed',
             });
             setResult(null);
             setError(null);
@@ -413,13 +757,18 @@ export default function QuizPage() {
         <QuizRunner
           quiz={quiz}
           submitting={submitting}
-          onSubmit={async (answers) => {
+          onSubmit={async (answers, elapsedSeconds, { auto = false } = {}) => {
             setSubmitting(true);
             try {
-              const payload = await api.submitQuiz(quiz.id, answers);
+              const payload = await api.submitQuiz(quiz.id, answers, elapsedSeconds);
               setResult(payload);
               loadHistory();
-              notify(`Scored ${payload.score.percent}%`, payload.score.percent >= 50 ? 'success' : 'warning');
+              notify(
+                auto
+                  ? `Time up — submitted automatically. Scored ${payload.score.percent}%`
+                  : `Scored ${payload.score.percent}%`,
+                payload.score.percent >= 50 ? 'success' : 'warning',
+              );
             } catch (err) {
               notify(err.message, 'error');
               setError(err);

@@ -1,279 +1,279 @@
 # LearnSphere AI
 
-LearnSphere AI is a learning platform built to ground student learning in their own study materials. It is a generative AI teacher that:
+A source-grounded study assistant built for the International AI Builders Congress 2026
+(Challenge: AI Teacher, team NITER_Parallax).
 
-- teaches from the content you upload,
-- applies explanations to your own documents,
-- helps you practice with generated questions,
-- lets you assess and revise on your own terms.
+LearnSphere AI teaches from the material a student uploads. Retrieval, citations and the
+fallback quiz generator run locally. A live model is optional, and when one is configured
+only the passages retrieved for a single question are sent to it.
 
-LearnSphere AI is an education platform built for students, learners, and independent learners who want to deepen their mastery using their own uploaded notes, documents, and practice questions. It is designed to be a source of guidance, explanations, practice questions, and revision that are always grounded in your own uploaded materials.
+## Contents
 
-## Table of Contents
-
-- [Product vision](#product-vision)
-- [Product identity](#product-identity)
-- [AI principles](#ai-principles)
-- [Product modules](#modules)
-- [AI architecture](#ai-architecture)
-- [Models and prompts](#models-and-prompts)
-- [Retrieval and grounding](#retrieval-and-grounding)
-- [Quiz generation and assessment](#quiz-generation-and-assessment)
-- [Learning progress](#learning-progress)
-- [Environment setup](#environment-setup)
-- [Development](#development)
-- [Testing](#testing)
+- [What it does](#what-it-does)
+- [How answers stay grounded](#how-answers-stay-grounded)
+- [Accounts, identity and data isolation](#accounts-identity-and-data-isolation)
+- [Storage and backups](#storage-and-backups)
+- [Study plan](#study-plan)
+- [Environment variables](#environment-variables)
+- [Development and tests](#development-and-tests)
 - [Deployment](#deployment)
-- [Privacy and security](#privacy-and-security)
-- [Limitations and risks](#limitations-and-risks)
-- [Team](#team)
-- [Contributing](#contributing)
-- [License](#license)
+- [Privacy](#privacy)
+- [Rotating a leaked API key](#rotating-a-leaked-api-key)
+- [What is not implemented](#what-is-not-implemented)
+- [Team and licence](#team-and-licence)
 
-## Product vision
+## What it does
 
-LearnSphere AI is a learning assistant that teaches from your own uploaded materials. It is a generative AI teacher that:
+- **AI Teacher** — ask about your own material; every answer cites the document, page and
+  passage it used, and says so honestly when the material does not support an answer.
+- **Uploads** — PDF, DOCX/DOC, RTF, ODT, Markdown and plain text, with the extraction result
+  shown (including warnings and page counts).
+- **Study summaries, Visual Study Studio and Learning Path** — cited notes, concept maps,
+  flowcharts, tables, timelines and step-by-step paths, all built from the uploaded material.
+- **Practice quizzes** — recall drills (definitions) or mixed sets (definitions plus
+  recognising statements), generated locally when no model is configured.
+- **Wrong-answer diagnostics** — concept-level feedback derived from the stored quiz data.
+- **Flashcards, due-review queue and Progress** — every card answer cites its source; the
+  review schedule comes from the student's own ratings.
+- **Learning DNA and the Adaptive Exam Coach** — an evidence profile of recorded attempts and
+  ratings, and a next-practice recommendation with the reason and the counts behind it.
+- **Study plan** — a syllabus mapped to the uploaded documents, with a daily schedule the
+  student can edit, pause and complete, and which updates from recorded practice.
+- **Bangla and English material** — tokenisation, sentence splitting, language detection and
+  generated content handle both scripts. Interface copy is English; see
+  [What is not implemented](#what-is-not-implemented).
 
-- teaches from the content you upload,
-- applies explanations to your own documents,
-- helps you practice with generated questions,
-- lets you assess and revise on your own terms.
+## How answers stay grounded
 
-LearnSphere AI is an education platform built for students, learners, and independent learners who want to deepen their mastery using their own uploaded notes, documents, and practice questions.
+1. Text is extracted from the upload and split into passages that keep document, page and
+   heading metadata.
+2. A per-learner BM25 index is built from **that learner's ready documents only**. The learner
+   filter is applied when the index is built, so a crafted query cannot reach another
+   account's passages.
+3. A passage is used only when its IDF-weighted query-term coverage reaches the configured
+   threshold. Below it, the teacher refuses instead of answering from a weak match.
+4. Citations are verified against the passages that were actually supplied; invented
+   citations are stripped before display.
 
-## Product identity
+There is **no separate “reasoning model” grading answers**. When a live provider is
+configured it writes the wording of an answer or a quiz; correctness for quizzes is decided by
+the stored answer key, and diagnostics are deterministic summaries of recorded answers. No
+component estimates ability, predicts a grade, or claims mastery or learning gain.
 
-LearnSphere AI is an education technology product designed to ground student learning in their own study materials. It is an AI Teacher for university students, college students, and independent learners.
+With `LEARNSPHERE_AI_PROVIDER=none` (the default) no text leaves the machine: extraction,
+retrieval, citations, summaries, flashcards, paths, quizzes and the coach all run locally.
 
-### Initial focus
+## Accounts, identity and data isolation
 
-- University-level study materials
-- PDF and text notes
-- Topic explanations
-- Practice MCQs
-- Source-grounded question answering
+The server has two identity modes, chosen with `AUTH_MODE`:
 
-### Product principle
+| Mode | Intended use | Identity |
+| --- | --- | --- |
+| `local` (default in development) | one student on one machine, demo, judging | a browser-asserted study profile (`X-Learner-Id`) |
+| `required` (default in production) | any public or shared deployment | a server-verified account session |
 
-The central product principle is: *Learn from your own materials. Understand the explanation. Verify the source. Practice until you improve.*
+**`local` is not authentication.** The profile id is sanitised and every store query filters
+on it, but anyone who can reach the API can send any profile id. The Settings screen and
+`/api/health` say this explicitly, and the server logs a warning at startup.
 
-## AI principles
+In `required` mode:
 
-LearnSphere AI is a teaching tool designed to help students learn more effectively. It is not a substitute for a human teacher, and it is not a substitute for a human explanation. The product is designed to be useful as a supplement to a human teacher, and to never replace the human teacher.
+- Registration and sign-in live at `/api/auth/*`. Passwords are hashed with **scrypt** and a
+  per-user random salt (never stored or logged in plain text; minimum 10 characters).
+- The session is a random 32-byte token in an **HttpOnly, SameSite=Lax** cookie. Only a SHA-256
+  digest of the token is stored, so a copy of the data directory cannot be replayed as a login.
+- Every API route except `/api/health`, `/api/config` and `/api/auth/*` answers **401**
+  without a session, and the account id — not any request header — decides whose rows are
+  read or written.
+- Signing out deletes the session server-side and clears the cookie. Signing in rotates the
+  session: the pre-login token stops working immediately.
+- State-changing requests must echo the session-bound CSRF token (`ls_csrf` cookie →
+  `X-CSRF-Token` header). Requests without it answer 403 `csrf_failed`.
+- The frontend is route-driven: `/` is a public welcome page, `/login`, `/signup` and `/reset`
+  are real forms, `/onboarding` is shown once to a new account, and any other route redirects a
+  signed-out visitor to `/login?next=<path>` so sign-in resumes where they were going.
+- `/api/account` exposes the profile, a JSON export of the caller's own data, and deletion.
+  Export never contains a password hash; deletion requires the account password, removes every
+  owned row and file, and deletes the account record.
+- Password reset is a single-use, hashed, 30-minute token. **No email provider is bundled**, so
+  on non-production deployments the one-time token is returned to the page (labelled as a
+  development token, `AUTH_DEV_RESET=0` disables it); production must configure delivery, and
+  nothing is exposed there.
 
-## Training
+Local-mode data is **not** silently migrated into an account. The two are separate learners by
+design; moving a library between them would be a data migration, and this build does not do one.
 
-LearnSphere AI is a student of your uploaded documents. Its teaching follows a few principles:
+## Storage and backups
 
-- Only the content you have uploaded is taught; nothing is invented.
-- Explanations are grounded in your own documents.
-- Answers are generated from the text that you have uploaded.
-- The system never executes uploaded content.
+All state lives under `LEARNSPHERE_DATA_DIR` (default `server/data/`, ignored by Git):
 
-## Models and prompts
+- `materials.json`, `sessions.json`, `quizzes.json`, `attempts.json`, `flashcard-decks.json`,
+  `flashcard-reviews.json`, `studio-visuals.json`, `learning-paths.json`,
+  `study-plans.json`, `users.json`, `auth-sessions.json`, `password-resets.json`
+- `raw/` — the uploaded files
+- `chunks/` — extracted passages per material
 
-LearnSphere AI uses a combination of:
+Writes are serialised per file and committed with a temp file + rename, so a crash cannot leave
+truncated JSON. A failed mutation or write is discarded and the queue keeps working; there is a
+regression test for that (`server/test/storage.queue.test.js`).
 
-- A generative model for generating explanations and answers.
-- A retrieval model for retrieving relevant passages.
-- A quiz model for generating practice questions.
-- A reasoning model for evaluating answers.
+`render.yaml` mounts a persistent disk at `/var/data` and sets
+`LEARNSPHERE_DATA_DIR=/var/data/learnsphere`; without a persistent disk, uploads are lost when
+the service restarts. Back up by copying that directory while the service is stopped (or
+copying `*.json` plus `raw/` and `chunks/`). A single instance is supported; multiple instances
+would need shared storage and a shared rate-limit store.
 
-## Retrieval and grounding
+## Study plan
 
-LearnSphere AI grounds every answer in the text that was uploaded. Every answer includes a source reference that points back to the original document, the page number, and the passage identifier.
+The plan (`/plan`, `POST /api/plan`) takes a pasted syllabus, an exam date, optional subjects,
+minutes per day, days per week and a preferred language. Each topic is matched against the
+learner's indexed passages and reported as:
 
-The retrieval pipeline:
+- **Covered by your material** — a document matched the topic. This does **not** mean the
+  student has learned it.
+- **Needs practice** — a document matched, and recorded quiz answers (below 80% on at least two
+  answers) or flashcard ratings (half or more “Again”/“Hard”) suggest another pass.
+- **Not found in uploaded material** — nothing matched. It is listed as a gap and is **never**
+  scheduled as study.
 
-1. Extract text from the uploaded document.
-2. Split the text into passages.
-3. Build an index.
-4. Retrieve the most relevant passages.
-5. Return source metadata along with the retrieved passages.
+The daily schedule mixes short study sessions (linking to the cited document), practice quizzes
+(scoped to the matching documents) and, when cards are due, the existing review queue. The plan
+never creates, moves or duplicates review dates. Tasks can be marked done, paused or resumed;
+edits and refreshes rebuild the schedule but keep completed and paused tasks (task ids are
+derived from date + kind + topic). “Why this topic” is written from counts, and there is no
+grade prediction anywhere.
 
-## Quiz generation
+## Environment variables
 
-LearnSphere AI generates practice quizzes from the files you upload. Each quiz is grounded in your own documents.
+Copy `.env.example` to `.env`. Everything is optional; the app runs with no configuration.
 
-The quiz generation is a generative model that generates questions and answers from the content you have uploaded. It is a generative model that generates questions from your own materials.
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PORT` | `8787` | HTTP port |
+| `NODE_ENV` | `development` | `production` also switches the `AUTH_MODE` default |
+| `AUTH_MODE` | `required` in production, `local` otherwise | identity mode (table above) |
+| `SESSION_TTL_DAYS` | `14` | account session lifetime |
+| `AUTH_RESET_TTL_MINUTES` | `30` | password-reset token lifetime |
+| `AUTH_DEV_RESET` | on outside production | return the one-time reset token to the page; set `0` to disable |
+| `TRUST_PROXY` | `0` | reverse-proxy hops to trust for `req.ip`; only a hop count is accepted |
+| `LEARNSPHERE_DATA_DIR` | `server/data` | storage directory |
+| `LEARNSPHERE_AI_PROVIDER` | `none` | `none`, `groq`, `gemini`, `openrouter`, `mistral`, `cloudflare`, `custom` |
+| `LEARNSPHERE_AI_API_KEY` | empty | server-side only; never sent to the browser |
+| `LEARNSPHERE_AI_MODEL` | provider default | model id |
+| `AI_TIMEOUT_MS` | `45000` | per-attempt provider timeout; timeouts are not retried |
+| `RATE_LIMIT_PER_MINUTE` | `120` | per-profile ceiling; the per-IP ceiling is 4× this |
+| `MAX_UPLOAD_MB`, `MAX_DOCUMENTS`, `RETRIEVAL_TOP_K`, `RETRIEVAL_MIN_SCORE` | see `.env.example` | limits and retrieval tuning |
 
-## Learning progress
+Provider privacy notes (verified October 2026) are in `.env.example` and shown in Settings.
 
-LearnSphere AI provides a learning progress view that shows the student how much they have practiced, how many questions they have answered, and how many they have answered correctly. It is a learning progress view, not a performance metric. It is designed to encourage students to practice, not to measure their performance.
+## Development and tests
 
-## Environment setup
-
-LearnSphere AI runs on your own files. With no AI key configured it sends nothing anywhere: extraction, BM25 retrieval, citations and quiz generation all happen on this machine. If you do configure a provider, only the few passages retrieved for a single question are sent to it - never a whole document, and never the rest of your library.
-
-### Dependencies
-
-- Node.js >= 20.11.0 (the range declared in `engines`)
-- npm >= 9
-
-### Installation
-
-Clone the repository and install dependencies:
+Requires Node.js >= 20.11.0.
 
 ```
-git clone
 npm install
+npm run dev        # Express on 8787 + Vite on 5173, ports auto-advance if taken
+npm test           # full server suite
+npm run test:eval  # grounded-answer evaluation set
+npm run build      # production web bundle
 ```
 
-### Environment setup
+`npm run dev` leaves existing processes untouched and prints the chosen URLs. Set `PORT` and
+`VITE_PORT` to pick starting ports.
 
-Copy `.env.example` to `.env` and set only what you need. The app runs with no configuration at all:
+Validation notes:
 
-```
-# Optional: upgrade answers from the local extractive teacher to a live model.
-LEARNSPHERE_AI_PROVIDER=none        # none | groq | gemini | openrouter | mistral | cloudflare | custom
-LEARNSPHERE_AI_API_KEY=             # server-side only; never sent to the browser
-LEARNSPHERE_AI_MODEL=               # blank uses the provider's default
-```
-
-`.env.example` documents every supported variable, including each provider's privacy policy.
-
-## Development
-
-To run LearnSphere AI in development mode:
-
-```
-npm run dev
-```
-
-This starts the backend server and the web frontend. If the default ports are
-already in use, the launcher selects the next available ports and configures
-the Vite API proxy to match. It leaves existing processes untouched. The
-selected URLs are printed at startup. You can set `PORT` and `VITE_PORT` to
-choose the first ports to try.
-
-### Tests
-
-To run the tests:
-
-```
-npm run test
-```
-
-There is no coverage script in this repository. `npm test` runs the whole Node test suite, and `npm run test:eval` runs the grounded-answer evaluation set.
+- `npm test` boots the real Express app against a temporary data directory (no mocks) and
+  covers retrieval, grounding, uploads, quizzes, flashcards, review queue, DNA, coach, study
+  plans, account isolation, rate limiting, secret handling and the Netlify proxy contract.
+- `npm run test:eval` runs the offline evaluation set.
+- `npm run build` is required before `npm run start` serves the SPA, and before the
+  “no key in the bundle” test can inspect `web/dist`.
 
 ## Deployment
 
-The frontend and Express API are separate in production. A folder-only static
-deploy contains the frontend files, but it does not run the Express process;
-that is why API calls such as `/api/config` returned Netlify's 404 page.
+The SPA and the Express API deploy separately:
 
-### Netlify frontend and API routing
+1. **Render** — `render.yaml` runs `npm run start --workspace server`, health-checks
+   `/api/health`, and mounts the persistent disk described above.
+2. **Netlify** — build with `npm run build`, publish `web/dist`, and route `/api/*` through
+   `netlify/functions/api.mjs` to the backend. That proxy forwards multiple `Set-Cookie`
+   headers, so account sessions work through it. It gives the upstream 9 seconds
+   (`LEARNSPHERE_PROXY_TIMEOUT_MS`, capped below Netlify's 10-second synchronous limit) and
+   returns a retryable `backend_timeout` after that.
 
-The repository includes `netlify.toml` and a small API proxy function. Deploy
-the repository using Netlify's Git integration or Netlify CLI so the function
-is built and deployed along with `web/dist`. Dragging only `web/dist` into the
-Netlify UI does not deploy functions. See Netlify's [Express/functions deployment guide](https://docs.netlify.com/build/frameworks/framework-setup-guides/express/).
+Set `LEARNSPHERE_BACKEND_URL` in Netlify (scope: **Functions**) when the backend is not the
+default one. A folder-only static deploy does not include functions; deploy the repository.
 
-Deploy the backend using the included `render.yaml` Blueprint. It runs the
-existing Express server and mounts a persistent disk at `/var/data` for
-materials, sessions, quizzes, and uploaded files. Copy your Netlify site URL and
-set `CORS_ALLOWED_ORIGINS` on Render to that exact origin (for example,
-`https://your-site.netlify.app`). That grant only matters if a browser calls the
-API directly; the same-origin proxy below does not need it.
+**For any public deployment:** set `AUTH_MODE=required`, set `CORS_ALLOWED_ORIGINS` to the
+site's exact origin, keep `TRUST_PROXY=0` unless a known proxy is in front, and give the
+service a persistent disk. `netlify.toml` deliberately keeps the secrets scanner enabled for
+`LEARNSPHERE_AI_API_KEY`.
 
-The Netlify Function ships with this project's own deployed API as its default
-backend, so a deployment of this repository works with **no environment
-variables at all**. To point the site at a different API - a fork, a staging
-service, or a host you moved to - set one variable in Netlify under
-**Project configuration → Environment variables**:
+Long AI generations can exceed the proxy's 9-second budget. The failure is a clear, retryable
+`backend_timeout`; retrying is safe because the API writes nothing (quiz, attempt, message)
+until a request succeeds. There is no asynchronous job/status flow in this build — see below.
 
-```
-LEARNSPHERE_BACKEND_URL=https://your-backend.onrender.com   # scope: Functions
-```
+## Privacy
 
-The scope must include **Functions**, and the site has to be deployed again:
-Netlify binds a function's environment variables at deploy time, so changing the
-value alone leaves the running function on the old one. Setting
-`VITE_API_BASE_URL` is optional - leave it unset so the browser calls `/api` on
-its own origin and the function forwards it. A relative base URL needs no CORS
-grant and cannot break when the backend host changes.
+- With no provider key, nothing leaves the machine.
+- With a provider, only the retrieved passages for one request are sent. Uploaded files are
+  never sent whole, and the rest of the library is never sent.
+- The API never logs question text, document content or keys. Request logs contain only method,
+  path, status and duration.
+- API responses are `Cache-Control: no-store`. Session cookies are HttpOnly and SameSite=Lax.
+- Error messages are written for students and never include stack traces, filesystem paths or
+  provider response bodies.
 
-`netlify.toml` also excludes six non-credential settings from Netlify's build
-secrets scanner (`SECRETS_SCAN_OMIT_KEYS`): `NODE_ENV`, `PORT`,
-`RETRIEVAL_MIN_SCORE`, `AI_TIMEOUT_MS`, `LEARNSPHERE_AI_PROVIDER` and
-`LEARNSPHERE_AI_MODEL`. Their values legitimately occur in the repository and in
-the published bundle - a threshold, a timeout, a provider name, a model name -
-and a variable marked "Contains secret values" fails the build whenever its
-value is found anywhere in the output. The keys are omitted; the scanner still
-runs, and `LEARNSPHERE_AI_API_KEY` is still scanned and would still fail the
-build if its value ever reached the output. The underlying fix is to unmark
-those variables in Netlify (they are configuration, not credentials); these
-omissions are the belt to that braces.
+## Rotating a leaked API key
 
-### Verifying a deployment
+If a key may have been exposed (shared, committed, pasted into a chat, included in a bundle):
 
-Three checks, in this order - each one isolates a different layer:
+1. Revoke it in the provider dashboard (Groq, Google AI Studio, OpenRouter, Mistral or
+   Cloudflare) and create a new one.
+2. Put the new value in `.env` locally and in the host's environment variables (Render →
+   Environment; never in a committed file). Redeploy or restart so the process reloads it.
+3. Confirm `.env` is ignored by Git (`git check-ignore -v .env`) and purge the old value from
+   any branch/history where it appears.
+4. Run `npm test` — the secrets test fails if the configured key appears in `web/dist`, and it
+   also checks that `.env.example` has blank placeholders.
 
-```
-# 1. The backend itself (Render). Expect 200 and "status":"ok".
-curl -s -o /dev/null -w "%{http_code}\n" https://ai-builders-congress-2026.onrender.com/api/health
+Rotation is complete only when the old key is revoked at the provider. Nothing in this
+repository can revoke it.
 
-# 2. The same route through the Netlify Function proxy. Expect the SAME JSON;
-#    a 502 here with "NetlifyUserError" means the function returned the wrong
-#    type, and 503 "backend_timeout" means the upstream did not answer in 9s
-#    (a sleeping free-tier instance - retry once).
-curl -s https://ai-builders-congress-2026.netlify.app/api/health
+## What is not implemented
 
-# 3. The published bundle. The HTML must reference the current build's hashes;
-#    asset names change on every build, so a stale hash means a stale deploy.
-curl -s https://ai-builders-congress-2026.netlify.app/ | grep -o 'assets/[A-Za-z0-9_.-]*'
-```
+Stated plainly so nobody plans around a feature that is not there:
 
-The Function's own log lines appear in Netlify under **Deploys → the latest
-deploy → Functions**, or **Logs → Functions**; every message this proxy writes
-starts with `LearnSphere proxy:`.
+- **No OCR.** Scanned/image-only PDFs extract no text; the upload is kept with an explicit
+  extraction warning and nothing is indexed, so those pages are reported as uncovered — never
+  as covered. External OCR is not called.
+- **No offline/PWA mode and no voice input/output.** Private study files are never cached for
+  offline use.
+- **No asynchronous AI job queue.** Requests are synchronous, bounded by the provider timeout
+  and, behind the Netlify proxy, by the 9-second upstream budget.
+- **Interface translation is partial.** Welcome, sign-in, sign-up, reset, onboarding, the
+  navigation shell, appearance/language controls and the account settings/data sections are
+  translated between English and Bangla. Deep tool screens (quiz player, studio, plan editor)
+  still use English labels; Bangla and English *material* is handled end to end. Banglish input
+  is handled only through normal tokenisation, not a dedicated transliteration layer.
+- **No email delivery for password reset.** The flow is implemented and tested (hashed,
+  single-use, expiring tokens; all sessions revoked on reset), but no mail provider is bundled.
+  Outside production the token is shown on the page for local/demo use; production needs a
+  delivery integration before the reset link can leave the server.
+- **OCR, voice and offline/PWA are not implemented**, so scanned-only PDFs and voice questions
+  are out of scope rather than faked.
+- **Rate limiting is in-memory per process**, so it is exact for one instance and indicative
+  for more.
+- **No spaced-repetition algorithm changes**: the review queue is derived from the learner's own
+  ratings and the plan only links to it.
+- The shared `local` profile is never treated as an account and is never shown to a signed-in
+  account. In account mode the browser profile id is ignored by the server for identity.
 
-### Rollback
+## Team and licence
 
-Both halves are independent, so roll back only the half that is broken.
-
-- **Netlify**: **Deploys** → pick the last deploy that worked → **Publish
-deploy**. That re-publishes the previous static bundle *and* its function,
-without a build.
-- **Render**: open the service → **Deploys** → the last successful deploy →
-**Rollback to this deploy**. The persistent disk is not affected, so uploaded
-materials survive.
-
-The Render disk requires a paid web-service plan; without persistent storage,
-uploaded study materials would be lost when the backend restarts, and the free
-plan also sleeps when idle, so the first request of the day can take up to a
-minute (the app retries instead of showing an error). See Render's [persistent disk documentation](https://render.com/docs/disks).
-
-For local preview, run `npm run dev`. For a standalone production server, run
-`npm run build` followed by `npm run start`.
-
-## Privacy and security
-
-By default - with no AI key - LearnSphere AI sends nothing anywhere, because every step runs locally against your own files. If you configure a provider, only the passages retrieved for one question leave this machine. Each provider's data policy is listed in `.env.example` and shown in the app's Settings screen, so you can decide before uploading anything private.
-
-### Security
-
-- The system does not execute uploaded content.
-- The system does not trust instructions embedded in uploaded documents.
-- The system preserves document identifiers and source metadata.
-
-## Limitations and risks
-
-- The AI may not answer every question.
-- The AI may answer questions that are not supported by the material.
-- The AI may generate questions that are not supported by the material.
-- The AI may not answer all questions.
-
-## Team
-
-- **Product name**: LearnSphere AI
+- **Product**: LearnSphere AI
 - **Team**: NITER_Parallax
-- **Competition**: International AI Builders Congress 2026
+- **Competition**: International AI Builders Congress 2026, Challenge: AI Teacher
 
-## Contributing
-
-We welcome contributions. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
-
-## License
-
-© 2026 LearnSphere AI. This project is licensed under the MIT License.
+© 2026 LearnSphere AI, MIT License.

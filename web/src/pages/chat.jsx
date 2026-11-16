@@ -209,6 +209,13 @@ export default function ChatPage({ route }) {
     }
   }, []);
 
+  // A link like #/chat?q=<text> prefills the composer. The Visual Study Studio
+  // uses it for "ask the AI Teacher about this concept".
+  useEffect(() => {
+    const prefilled = route?.params?.get('q');
+    if (prefilled) setQuestion(prefilled);
+  }, [route?.params]);
+
   useEffect(() => {
     loadSessions();
   }, [loadSessions, learnerId]);

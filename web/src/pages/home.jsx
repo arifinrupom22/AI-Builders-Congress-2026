@@ -1,70 +1,183 @@
 /**
  * Overview — the landing screen.
  *
- * Answers three questions in order: what can I do here, what is in my library,
- * and what should I do next. Every number comes from the server; when there is
- * no activity yet it says so instead of showing a zero-filled chart.
+ * Answers three questions in order: what should I do next, where are the main
+ * tools, and what have I done so far. The "next step" is derived only from
+ * real state — an empty library, failed uploads, missing sessions, missing
+ * attempts, or topics worth revising — and every number comes from the server.
+ * When there is no activity yet the page says so instead of showing
+ * zero-filled charts.
  */
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
 import { useApp } from '../store/AppContext.jsx';
 import { Icon } from '../components/Icons.jsx';
 import { Alert, Badge, Card, EmptyState, ErrorPanel, LoadingPanel, ProgressBar, StatTile } from '../components/ui.jsx';
-import { formatNumber, formatPercent, formatRelative, pluralise, truncate } from '../lib/format.js';
+import { formatDueIn, formatNumber, formatPercent, formatRelative, pluralise, truncate } from '../lib/format.js';
 
-const QUICK_ACTIONS = [
-  {
-    to: '/materials',
-    icon: 'upload',
-    label: 'Upload study material',
-    desc: 'Add a PDF, Word, Markdown or text file — in Bangla or English.',
-  },
-  {
-    to: '/summary',
-    icon: 'lightbulb',
-    label: 'Generate a study summary',
-    desc: 'Turn a whole document into cited revision notes.',
-  },
-  {
-    to: '/chat',
-    icon: 'teacher',
-    label: 'Ask the AI Teacher',
-    desc: 'Get an explanation grounded in your own notes, with citations.',
-  },
-  {
-    to: '/quiz',
-    icon: 'quiz',
-    label: 'Practise a quiz',
-    desc: 'Turn a topic or a document into multiple-choice questions.',
-  },
-  {
-    to: '/progress',
+/**
+ * Pick the single most useful thing to do next from real library and practice
+ * state. Returns null while the activity data is still loading or failed, so
+ * the panel never guesses.
+ */
+function pickNextStep({ materials, totals, weakestTopics, due }) {
+  if (!materials || !totals) return null;
+
+  const failed = materials.filter((m) => m.status === 'failed');
+  const ready = materials.filter((m) => m.status === 'ready');
+
+  if (materials.length === 0) {
+    return {
+      icon: 'upload',
+      title: 'Add your first study material',
+      body: 'Upload a PDF, Word, Markdown or text file — in Bangla or English. Everything else here works from what you upload.',
+      action: { to: '/materials', label: 'Upload material' },
+    };
+  }
+
+  if (failed.length > 0) {
+    return {
+      icon: 'alert',
+      title: `Fix ${failed.length} file${pluralise(failed.length, '', 's')} that could not be indexed`,
+      body: `${failed.map((m) => truncate(m.name, 40)).join(', ')} — nothing from these files is searchable yet.`,
+      action: { to: '/materials', label: 'Open My Materials' },
+    };
+  }
+
+  // Cards the learner's own ratings have brought back: time-sensitive, real,
+  // and only shown when the server says something is actually actionable.
+  const dueCount = due?.counts?.actionable ?? 0;
+  if (dueCount > 0) {
+    const pastDue = due.counts.due ?? 0;
+    return {
+      icon: 'clock',
+      title: `${dueCount} card${pluralise(dueCount, ' is', 's are')} due for review`,
+      body: `${pastDue > 0 ? `${pastDue} ${pluralise(pastDue, 'is', 'are')} already past due. ` : ''}These dates come from your own ratings: “Again” returns in 10 minutes, a successful review grows the interval.`,
+      action: { to: '/review', label: 'Open the queue' },
+    };
+  }
+
+  if (ready.length > 0 && (totals.sessions ?? 0) === 0) {
+    return {
+      icon: 'teacher',
+      title: 'Ask the AI Teacher about your material',
+      body: `Your ${ready.length} document${pluralise(ready.length, ' is', 's are')} indexed. Ask a question — the answer cites the file and page it came from.`,
+      action: { to: '/chat', label: 'Open AI Teacher' },
+    };
+  }
+
+  if ((totals.quizzesAttempted ?? 0) === 0) {
+    return {
+      icon: 'quiz',
+      title: 'Take your first practice quiz',
+      body: 'Questions are written from your own passages, so you can check your understanding straight away.',
+      action: { to: '/quiz', label: 'Start a quiz' },
+    };
+  }
+
+  if (weakestTopics?.length) {
+    return {
+      icon: 'target',
+      title: `Practise “${truncate(weakestTopics[0].topic, 48)}”`,
+      body: `You answered ${weakestTopics[0].correct} of ${weakestTopics[0].total} correctly on this topic. A quick quiz is the fastest way to close the gap.`,
+      action: { to: '/quiz', label: 'Practise now' },
+    };
+  }
+
+  return {
     icon: 'chart',
-    label: 'Review progress',
-    desc: 'See what you have practised and what to revise next.',
-  },
-];
+    title: 'Review your progress',
+    body: 'Your recent topics are going well. The progress view shows what to keep warm over the next few days.',
+    action: { to: '/progress', label: 'Open Progress' },
+  };
+}
 
-function QuickCard({ item }) {
-  return (
-    <a className="quick-card" href={`#${item.to}`}>
-      <span className="quick-card__icon">
-        <Icon name={item.icon} size={20} />
-      </span>
-      <span className="quick-card__label">{item.label}</span>
-      <span className="quick-card__desc">{item.desc}</span>
-      <span className="quick-card__go">
-        Open <Icon name="chevronRight" size={14} />
-      </span>
-    </a>
-  );
+/** The three main tools, each with a live stat from the server. */
+function buildEntryPoints({ materials, totals, overview, queue, queueFailed }) {
+  const ready = materials.filter((m) => m.status === 'ready').length;
+  const sessions = totals?.sessions ?? 0;
+  const attempts = totals?.quizzesAttempted ?? 0;
+  const lastAttempt = overview?.recentAttempts?.[0];
+  const dueCounts = queue?.counts ?? null;
+
+  // The queue stat is only ever what the server reported — loading and
+  // failure say so plainly instead of showing a hopeful zero.
+  const dueStat = queueFailed
+    ? 'Schedule unavailable'
+    : !queue
+      ? 'Checking your schedule…'
+      : !dueCounts || dueCounts.totalCards === 0
+        ? 'No cards scheduled yet'
+        : dueCounts.actionable > 0
+          ? `${dueCounts.actionable} card${pluralise(dueCounts.actionable, '', 's')} ready now`
+          : queue.nextDueAt
+            ? `Nothing due · next ${formatDueIn(queue.nextDueAt)}`
+            : 'Nothing due right now';
+  const dueActionable = dueCounts?.actionable ?? 0;
+
+  return [
+    {
+      to: '/materials',
+      icon: 'library',
+      label: 'My Materials',
+      desc: 'Upload and inspect your study files — see exactly what was indexed.',
+      stat: materials.length
+        ? `${ready} of ${materials.length} file${pluralise(materials.length, '', 's')} ready`
+        : 'No files yet',
+      cta: materials.length ? 'Browse library' : 'Upload your first file',
+    },
+    {
+      to: '/chat',
+      icon: 'teacher',
+      label: 'AI Teacher',
+      desc: 'Ask questions in your own words and get cited, verifiable answers.',
+      stat: sessions
+        ? `${sessions} study session${pluralise(sessions, '', 's')}`
+        : 'No sessions yet',
+      cta: sessions ? 'Continue learning' : 'Ask a question',
+    },
+    {
+      to: '/studio',
+      icon: 'sitemap',
+      label: 'Visual studio',
+      desc: 'See your material as a concept map, flowchart, comparison table or timeline.',
+      stat: ready ? 'Maps, flowcharts, timelines & tables' : 'Nothing to visualise yet',
+      cta: 'Open the studio',
+    },
+    {
+      to: '/quiz',
+      icon: 'quiz',
+      label: 'Practice',
+      desc: 'Generate multiple-choice questions from your own material.',
+      stat: attempts
+        ? `${attempts} ${pluralise(attempts, 'quiz', 'quizzes')} · ${
+            lastAttempt ? `last score ${lastAttempt.percent}%` : 'no score yet'
+          }`
+        : 'No quizzes yet',
+      cta: attempts ? 'Practise again' : 'Start practising',
+    },
+    {
+      to: '/review',
+      icon: 'clock',
+      label: 'Due for review',
+      desc: 'Cards your ratings scheduled to come back — review, rate again or snooze.',
+      stat: dueStat,
+      cta: dueActionable > 0 ? 'Review now' : 'Open the queue',
+      tone: dueActionable > 0 ? 'warning' : undefined,
+    },
+  ];
 }
 
 export default function HomePage() {
-  const { ai, materials, health, learnerId } = useApp();
+  const { ai, materials, health, learnerId, auth } = useApp();
+  // In account mode the identity shown is the verified account, never the
+  // browser's profile id.
+  const identity = auth?.user ? auth.user.displayName || auth.user.email : learnerId;
   const [overview, setOverview] = useState(null);
   const [state, setState] = useState('loading');
   const [error, setError] = useState(null);
+  const [queue, setQueue] = useState(null);
+  const [queueFailed, setQueueFailed] = useState(false);
 
   const load = useCallback(async (signal) => {
     setState('loading');
@@ -87,11 +200,36 @@ export default function HomePage() {
     return () => controller.abort();
   }, [load, learnerId]);
 
+  // Due-queue counts for the entry point. A failure only greys the stat: the
+  // rest of the Overview keeps working.
+  useEffect(() => {
+    let alive = true;
+    setQueue(null);
+    setQueueFailed(false);
+    api
+      .dueFlashcards({ summary: true })
+      .then((summary) => {
+        if (alive) setQueue(summary);
+      })
+      .catch(() => {
+        if (alive) setQueueFailed(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [learnerId]);
+
   const totals = overview?.totals;
   const readyMaterials = materials.filter((m) => m.status === 'ready').length;
   const failedMaterials = materials.filter((m) => m.status === 'failed');
   const isEmpty = materials.length === 0;
   const activity = overview?.activity ?? [];
+
+  const nextStep =
+    state === 'ready'
+      ? pickNextStep({ materials, totals, weakestTopics: overview?.weakestTopics, due: queue })
+      : null;
+  const entryPoints = buildEntryPoints({ materials, totals, overview, queue, queueFailed });
 
   return (
     <div className="page">
@@ -106,38 +244,49 @@ export default function HomePage() {
             Every answer cites the file and page it came from, and it will tell you plainly when your
             notes do not cover a question.
           </p>
-          <div className="hero__actions">
-            <a className="ls-btn ls-btn--primary ls-btn--md" href="#/materials">
-              <Icon name="upload" size={17} />
-              <span>Add study material</span>
-            </a>
-            <a className="ls-btn ls-btn--secondary ls-btn--md" href="#/chat">
-              <Icon name="teacher" size={17} />
-              <span>Ask the AI Teacher</span>
-            </a>
+          <div className="hero__meta">
+            <span className="hero__meta-item">
+              <Badge tone={ai?.mode === 'live' ? 'success' : 'warning'} icon={ai?.mode === 'live' ? 'sparkles' : 'shield'}>
+                {ai?.mode === 'live' ? `${ai.label} · ${ai.model}` : 'Local extractive mode'}
+              </Badge>
+            </span>
+            <span className="hero__meta-item">
+              <Icon name="database" size={14} /> {formatNumber(health?.store?.passages ?? 0)} indexed passages
+            </span>
+            <span className="hero__meta-item">
+              <Icon name="user" size={14} /> Studying as {identity}
+            </span>
           </div>
-        </div>
-        <div className="hero__aside">
-          <div className="hero__aside-row">
-            <span className="hero__aside-label">Answer engine</span>
-            <Badge tone={ai?.mode === 'live' ? 'success' : 'warning'} icon={ai?.mode === 'live' ? 'sparkles' : 'shield'}>
-              {ai?.mode === 'live' ? `${ai.label} · ${ai.model}` : 'Local extractive mode'}
-            </Badge>
-          </div>
-          <div className="hero__aside-row">
-            <span className="hero__aside-label">Study profile</span>
-            <span className="hero__aside-value">{learnerId}</span>
-          </div>
-          <div className="hero__aside-row">
-            <span className="hero__aside-label">Indexed passages</span>
-            <span className="hero__aside-value">{formatNumber(health?.store?.passages ?? 0)}</span>
-          </div>
-          <p className="hero__aside-note">
+          <p className="hero__privacy">
             {ai?.mode === 'live'
               ? 'Only the retrieved passages are sent to the model — never your whole library.'
               : 'No AI key configured, so answers are assembled locally from your own text and nothing leaves this machine.'}
           </p>
         </div>
+
+        {nextStep ? (
+          <aside className="next-step" aria-label="Suggested next step">
+            <span className="next-step__label">
+              <Icon name="chevronRight" size={13} /> Next step
+            </span>
+            <span className="next-step__icon" aria-hidden="true">
+              <Icon name={nextStep.icon} size={20} />
+            </span>
+            <h3 className="next-step__title">{nextStep.title}</h3>
+            <p className="next-step__body">{nextStep.body}</p>
+            <a className="ls-btn ls-btn--primary ls-btn--md next-step__cta" href={`#${nextStep.action.to}`}>
+              <span>{nextStep.action.label}</span>
+              <Icon name="chevronRight" size={16} />
+            </a>
+          </aside>
+        ) : (
+          <aside className="next-step next-step--pending" aria-label="Suggested next step">
+            <span className="next-step__label">
+              <Icon name="chevronRight" size={13} /> Next step
+            </span>
+            <LoadingPanel label="Working out what to do next" rows={2} />
+          </aside>
+        )}
       </section>
 
       {failedMaterials.length > 0 ? (
@@ -149,45 +298,65 @@ export default function HomePage() {
         </Alert>
       ) : null}
 
-      <section className="quick-grid" aria-label="Quick actions">
-        {QUICK_ACTIONS.map((item) => (
-          <QuickCard key={item.to} item={item} />
+      <section className="entry-grid" aria-label="Main tools">
+        {entryPoints.map((item) => (
+          <a key={item.to} className={`entry-card${item.tone ? ` entry-card--${item.tone}` : ''}`} href={`#${item.to}`}>
+            <span className="entry-card__icon" aria-hidden="true">
+              <Icon name={item.icon} size={20} />
+            </span>
+            <span className="entry-card__label">{item.label}</span>
+            <span className="entry-card__desc">{item.desc}</span>
+            <span className="entry-card__stat">{item.stat}</span>
+            <span className="entry-card__cta">
+              {item.cta} <Icon name="chevronRight" size={14} />
+            </span>
+          </a>
         ))}
       </section>
 
-      <section className="stat-row" aria-label="Library summary">
-        <StatTile
-          label="Materials"
-          value={formatNumber(materials.length)}
-          hint={isEmpty ? 'Nothing uploaded yet' : `${readyMaterials} ready · ${materials.length - readyMaterials} not indexed`}
-          icon="library"
-        />
-        <StatTile
-          label="Indexed passages"
-          value={formatNumber(totals?.passages ?? 0)}
-          hint="Searchable chunks of your documents"
-          icon="database"
-        />
-        <StatTile
-          label="Questions answered"
-          value={formatNumber(totals?.questionsAnswered ?? 0)}
-          hint={`${formatNumber(totals?.questionsCorrect ?? 0)} correct`}
-          icon="quiz"
-        />
-        <StatTile
-          label="Accuracy"
-          value={formatPercent(totals?.overallAccuracy)}
-          hint="Over questions you actually answered"
-          icon="target"
-        />
-      </section>
+      <p className="also-links">
+        Also: <a className="ls-link" href="#/summary">Study summary</a> — turn a document into cited
+        revision notes · <a className="ls-link" href="#/progress">Progress</a> — what you have
+        practised and what to revise next.
+      </p>
 
-      {state === 'loading' ? (
+      {state === 'error' ? (
+        <ErrorPanel error={error} onRetry={() => load()} title="Could not load your activity" />
+      ) : null}
+
+      {!isEmpty && totals ? (
+        <section className="stat-row" aria-label="Library summary">
+          <StatTile
+            label="Materials"
+            value={formatNumber(materials.length)}
+            hint={readyMaterials === materials.length ? `${readyMaterials} indexed` : `${readyMaterials} of ${materials.length} ready`}
+            icon="library"
+          />
+          <StatTile
+            label="Indexed passages"
+            value={formatNumber(totals?.passages ?? 0)}
+            hint="Searchable chunks of your documents"
+            icon="database"
+          />
+          <StatTile
+            label="Questions answered"
+            value={formatNumber(totals?.questionsAnswered ?? 0)}
+            hint={`${formatNumber(totals?.questionsCorrect ?? 0)} correct`}
+            icon="quiz"
+          />
+          <StatTile
+            label="Accuracy"
+            value={formatPercent(totals?.overallAccuracy)}
+            hint="Over questions you actually answered"
+            icon="target"
+          />
+        </section>
+      ) : null}
+
+      {state === 'loading' && materials.length === 0 ? (
         <Card title="Activity">
           <LoadingPanel label="Loading your activity" rows={3} />
         </Card>
-      ) : state === 'error' ? (
-        <ErrorPanel error={error} onRetry={() => load()} title="Could not load your activity" />
       ) : isEmpty ? (
         <EmptyState
           icon="upload"
@@ -200,7 +369,7 @@ export default function HomePage() {
             </a>
           }
         />
-      ) : (
+      ) : !overview ? null : (
         <>
           <div className="split">
             <Card

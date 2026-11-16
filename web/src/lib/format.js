@@ -65,6 +65,57 @@ export function pluralise(count, singular, plural = `${singular}s`) {
   return Number(count) === 1 ? singular : plural;
 }
 
+function spellOut(ms, { ceiling = false } = {}) {
+  const abs = Math.max(0, ms);
+  if (abs < 45_000) return 'a moment';
+  if (abs < 90 * 60_000) {
+    const n = Math.max(1, Math[ceiling ? 'round' : 'floor'](abs / 60_000));
+    return `${n} minute${n === 1 ? '' : 's'}`;
+  }
+  if (abs < 30 * DAY_MS) {
+    const n = Math.max(1, Math[ceiling ? 'round' : 'floor'](abs / 3_600_000));
+    return `${n} hour${n === 1 ? '' : 's'}`;
+  }
+  if (abs < 70 * DAY_MS) {
+    const n = Math.max(1, Math[ceiling ? 'round' : 'floor'](abs / DAY_MS));
+    return `${n} day${n === 1 ? '' : 's'}`;
+  }
+  const weeks = Math.max(1, Math.round(abs / (7 * DAY_MS)));
+  return `${weeks} week${weeks === 1 ? '' : 's'}`;
+}
+
+/** "in 3 days" / "now" / "2 days ago" — a one-directional delta for due dates. */
+export function formatDueIn(iso, now = Date.now()) {
+  const time = Date.parse(iso ?? '');
+  if (Number.isNaN(time)) return 'at an unknown time';
+  const diff = time - now;
+  if (diff <= 60_000 && diff >= -60_000) return 'now';
+  if (diff > 0) return `in ${spellOut(diff, { ceiling: true })}`;
+  return `${spellOut(-diff)} ago`;
+}
+
+/** A queue chip: "due now", "due in 3 days", "overdue by 2 days", or "new". */
+export function formatDue(iso, { now = Date.now(), isNew = false } = {}) {
+  if (isNew) return 'new';
+  const time = Date.parse(iso ?? '');
+  if (Number.isNaN(time)) return 'unscheduled';
+  const diff = time - now;
+  if (diff <= 60_000 && diff >= -60_000) return 'due now';
+  if (diff > 0) return `due in ${spellOut(diff, { ceiling: true })}`;
+  return `overdue by ${spellOut(-diff)}`;
+}
+
+/** Interval length in plain words: 600000 -> "10 minutes", 3d -> "3 days". */
+export function formatInterval(ms) {
+  const value = Number(ms);
+  if (!Number.isFinite(value) || value <= 0) return 'unscheduled';
+  if (value < 3_600_000) {
+    const n = Math.max(1, Math.round(value / 60_000));
+    return `${n} minute${n === 1 ? '' : 's'}`;
+  }
+  return spellOut(value, { ceiling: true });
+}
+
 /** Title-case a route id such as "not-found" into something readable. */
 export function humanise(value) {
   return String(value ?? '')

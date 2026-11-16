@@ -37,8 +37,11 @@ export function corsGuard(allowedOrigins) {
     }
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Learner-Id, X-Request-Id');
+    // Needed so a signed-in account's HttpOnly session cookie can travel to an
+    // explicitly allowed origin. It is never combined with a wildcard.
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Learner-Id, X-CSRF-Token, X-Request-Id');
     res.setHeader('Access-Control-Max-Age', '600');
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     return next();

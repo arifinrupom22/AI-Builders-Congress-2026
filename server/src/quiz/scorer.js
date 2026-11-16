@@ -20,6 +20,11 @@ export function toPublicQuiz(quiz) {
     // The language the questions were written in, so the UI can label a Bangla
     // quiz instead of leaving the student guessing.
     language: quiz.language ?? null,
+    // 'recall' drills ask only what concepts mean; 'mixed' adds statement
+    // recognition. Older quizzes have no stored style and read as mixed.
+    style: quiz.style ?? 'mixed',
+    // Optional study timer. The answer key is still withheld until submission.
+    timeLimitSeconds: quiz.timeLimitSeconds ?? null,
     createdAt: quiz.createdAt,
     questionCount: quiz.questions.length,
     questions: quiz.questions.map((q) => ({
@@ -38,6 +43,8 @@ export function toQuizSummary(quiz) {
     title: quiz.title,
     topic: quiz.topic,
     generationMode: quiz.generationMode,
+    style: quiz.style ?? 'mixed',
+    timeLimitSeconds: quiz.timeLimitSeconds ?? null,
     createdAt: quiz.createdAt,
     questionCount: quiz.questions.length,
   };

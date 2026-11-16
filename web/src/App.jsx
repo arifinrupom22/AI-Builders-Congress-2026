@@ -7,8 +7,8 @@
  */
 import { Component, useCallback, useEffect, useState } from 'react';
 import { AppProvider, useApp } from './store/AppContext.jsx';
-import { useRoute } from './lib/router.jsx';
-import { AppShell } from './components/AppShell.jsx';
+import { navigate, replace, useRoute } from './lib/router.jsx';
+import { AppShell, findNavEntry } from './components/AppShell.jsx';
 import { Alert, Button, LoadingPanel } from './components/ui.jsx';
 import { Icon } from './components/Icons.jsx';
 
@@ -16,18 +16,38 @@ import HomePage from './pages/home.jsx';
 import MaterialsPage from './pages/materials.jsx';
 import ChatPage from './pages/chat.jsx';
 import SummaryPage from './pages/summary.jsx';
+import StudioPage from './pages/studio.jsx';
+import LearningPathPage from './pages/path.jsx';
+import LearningDnaPage from './pages/dna.jsx';
+import CoachPage from './pages/coach.jsx';
+import PlanPage from './pages/plan.jsx';
+import AuthPage from './pages/auth.jsx';
+import WelcomePage from './pages/welcome.jsx';
+import OnboardingPage from './pages/onboarding.jsx';
 import QuizPage from './pages/quiz.jsx';
+import FlashcardsPage from './pages/flashcards.jsx';
+import ReviewQueuePage from './pages/review-queue.jsx';
 import ProgressPage from './pages/progress.jsx';
 import SettingsPage from './pages/settings.jsx';
 import NotFoundPage from './pages/not-found.jsx';
 
+// Routes that exist for signed-out visitors as well.
+const PUBLIC_PATHS = new Set(['/', '/login', '/signup', '/reset']);
+
 const ROUTES = [
-  { path: '/', Component: HomePage },
+  { path: '/dashboard', Component: HomePage },
   { path: '/materials', Component: MaterialsPage },
   { path: '/summary', Component: SummaryPage },
+  { path: '/studio', Component: StudioPage },
+  { path: '/path', Component: LearningPathPage },
   { path: '/chat', Component: ChatPage },
   { path: '/quiz', Component: QuizPage },
+  { path: '/flashcards', Component: FlashcardsPage },
+  { path: '/review', Component: ReviewQueuePage },
   { path: '/progress', Component: ProgressPage },
+  { path: '/dna', Component: LearningDnaPage },
+  { path: '/coach', Component: CoachPage },
+  { path: '/plan', Component: PlanPage },
   { path: '/settings', Component: SettingsPage },
 ];
 
@@ -76,9 +96,49 @@ const PROXY_ERROR_CODES = [...CONFIG_ERROR_CODES, 'backend_timeout', 'backend_un
 
 function Runtime() {
   const route = useRoute();
-  const { bootState, bootError, bootAttempt, bootRetryLimit, reload } = useApp();
+  const { bootState, bootError, bootAttempt, bootRetryLimit, reload, auth, config } = useApp();
   const [retrying, setRetrying] = useState(false);
   const Page = resolveRoute(route);
+
+  const accounts = config?.auth?.mode === 'required';
+  const signedIn = Boolean(auth?.user);
+  const needsOnboarding = accounts && signedIn && auth.user.onboardingCompleted !== true;
+
+  // Client-side routing rules. The server enforces the real boundary: these
+  // redirects only keep a signed-out browser away from screens it cannot use.
+  useEffect(() => {
+    if (bootState !== 'ready' || auth.state !== 'ready') return;
+    const path = route.path;
+
+    if (!accounts) {
+      // Demo deployment: `/` is the welcome page, everything else is the demo.
+      if (path === '/' ) return;
+      if (path === '/login' || path === '/signup' || path === '/reset' || path === '/onboarding') {
+        replace('/dashboard');
+      }
+      return;
+    }
+
+    if (!signedIn) {
+      if (!PUBLIC_PATHS.has(path)) {
+        // Remember where the visitor was going so sign-in can resume it.
+        replace(`/login?next=${encodeURIComponent(path)}`);
+      }
+      return;
+    }
+
+    if (needsOnboarding && path !== '/onboarding') {
+      replace('/onboarding');
+      return;
+    }
+
+    if (path === '/' || path === '/login' || path === '/signup' || path === '/reset') {
+      replace(needsOnboarding ? '/onboarding' : '/dashboard');
+      return;
+    }
+
+    if (!needsOnboarding && path === '/onboarding') replace('/dashboard');
+  }, [accounts, auth.state, bootState, needsOnboarding, route.path, signedIn]);
 
   // Retry in place: nothing the student already has in this browser is cleared.
   const retry = useCallback(async () => {
@@ -89,6 +149,14 @@ function Runtime() {
       setRetrying(false);
     }
   }, [reload]);
+
+  // Keep the tab title in step with the page the learner is on.
+  useEffect(() => {
+    if (bootState !== 'ready') return;
+    if (accounts && !signedIn) return; // auth pages set their own title
+    const entry = findNavEntry(route.path);
+    document.title = entry ? `${entry.title} · LearnSphere AI` : 'LearnSphere AI';
+  }, [accounts, bootState, route.path, signedIn]);
 
   // Each route starts at the top of the page.
   useEffect(() => {
@@ -187,6 +255,37 @@ function Runtime() {
         </div>
       </div>
     );
+  }
+
+  // A signed-out visitor gets the real public pages; a private URL is being
+  // redirected to /login with a return path by the effect above.
+  if (accounts && !signedIn) {
+    if (route.path === '/') return <WelcomePage />;
+    if (PUBLIC_PATHS.has(route.path)) return <AuthPage route={route} />;
+    return (
+      <div className="boot">
+        <div className="boot__card">
+          <h1 className="boot__title">Redirecting to sign in…</h1>
+          <p className="boot__text">This page is private. Taking you to the sign-in form.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (accounts && needsOnboarding) {
+    return <OnboardingPage />;
+  }
+
+  // Welcome, sign-in and reset stay reachable once signed in only long enough
+  // for the redirect above; rendering the app avoids a flash of public pages.
+  if (!accounts && route.path === '/') {
+    return <WelcomePage onDemo={() => navigate('/dashboard')} />;
+  }
+  if (route.path === '/login' || route.path === '/signup' || route.path === '/reset') {
+    return <AuthPage route={route} />;
+  }
+  if (!accounts && route.path === '/onboarding') {
+    return <OnboardingPage />;
   }
 
   return (

@@ -8,6 +8,8 @@
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { api, getLearnerId, setLearnerId as persistLearnerId, normaliseLearnerId } from '../lib/api.js';
+import { createTranslator, detectLanguage, persistLanguage } from '../lib/i18n.js';
+import { applyTheme, getStoredTheme, persistTheme, watchSystemTheme } from '../lib/theme.js';
 
 const AppContext = createContext(null);
 
@@ -48,11 +50,25 @@ export function AppProvider({ children }) {
   const [materials, setMaterials] = useState([]);
   const [materialIndex, setMaterialIndex] = useState(null);
 
+  // Account state. In local mode `user` stays null and the study profile is
+  // used instead; the server says which mode this deployment is in.
+  const [auth, setAuth] = useState({ state: 'loading', mode: null, user: null, limitations: [] });
+
   const [bootState, setBootState] = useState('loading'); // loading | ready | offline
   const [bootError, setBootError] = useState(null);
   const [bootAttempt, setBootAttempt] = useState(0);
   const bootController = useRef(null);
   const [materialsState, setMaterialsState] = useState('loading'); // loading | ready | error
+
+  // Appearance and interface language are personal preferences: stored locally
+  // and, when signed in, mirrored to the account profile.
+  const [theme, setThemeState] = useState(() => getStoredTheme());
+  const [language, setLanguageState] = useState(() => detectLanguage());
+
+  useEffect(() => {
+    applyTheme(theme);
+    return watchSystemTheme(() => theme);
+  }, [theme]);
 
   const [toasts, setToasts] = useState([]);
   const timers = useRef(new Map());
@@ -94,6 +110,19 @@ export function AppProvider({ children }) {
     if (signal?.aborted) return;
     setConfig(nextConfig);
     setHealth(nextHealth);
+    return nextConfig;
+  }, []);
+
+  const loadAuth = useCallback(async (signal) => {
+    const session = await api.session();
+    if (signal?.aborted) return null;
+    setAuth({
+      state: 'ready',
+      mode: session.mode ?? null,
+      user: session.user ?? null,
+      limitations: session.limitations ?? [],
+    });
+    return session;
   }, []);
 
   const loadMaterials = useCallback(async (signal) => {
@@ -131,8 +160,18 @@ export function AppProvider({ children }) {
 
       for (let attempt = 0; ; attempt += 1) {
         try {
-          await loadConfig(signal);
+          const nextConfig = await loadConfig(signal);
+          const session = await loadAuth(signal);
           if (signal?.aborted) return 'aborted';
+          // An account deployment must not fetch one learner's library before
+          // it knows who is signed in.
+          if (nextConfig?.auth?.mode === 'required' && !session?.user) {
+            setMaterials([]);
+            setMaterialIndex(null);
+            setMaterialsState('ready');
+          } else {
+            await loadMaterials(signal).catch(() => {});
+          }
           setBootState('ready');
           return 'ready';
         } catch (err) {
@@ -149,20 +188,109 @@ export function AppProvider({ children }) {
         }
       }
     },
-    [loadConfig],
+    [loadConfig, loadAuth, loadMaterials],
   );
 
-  // Boot (and re-boot when the study profile changes).
+  // Boot (and re-boot when the identity changes: profile in local mode, account
+  // in account mode). Materials are loaded inside boot so the order is right.
+  const identityKey = auth.user?.id ?? learnerId;
   useEffect(() => {
     const controller = new AbortController();
     boot(controller.signal);
-
-    loadMaterials(controller.signal).catch(() => {
-      /* surfaced through materialsState instead */
-    });
-
     return () => controller.abort();
-  }, [learnerId, boot, loadMaterials]);
+  }, [identityKey, boot]);
+
+  const applySession = useCallback(
+    async (session) => {
+      setAuth({
+        state: 'ready',
+        mode: session.mode ?? config?.auth?.mode ?? null,
+        user: session.user ?? null,
+        limitations: [],
+      });
+      setMaterialsState('loading');
+      try {
+        await loadMaterials();
+      } catch {
+        /* surfaced through materialsState */
+      }
+    },
+    [config?.auth?.mode, loadMaterials],
+  );
+
+  const signIn = useCallback(
+    async (email, password) => {
+      const session = await api.login({ email, password });
+      await applySession(session);
+      notify(`Signed in as ${session.user.email}.`, 'success');
+      return session.user;
+    },
+    [applySession, notify],
+  );
+
+  const registerAccount = useCallback(
+    async (email, password, displayName) => {
+      const session = await api.register({ email, password, displayName });
+      await applySession(session);
+      notify('Account created. Your library is private to this account.', 'success');
+      return session.user;
+    },
+    [applySession, notify],
+  );
+
+  const signOut = useCallback(async () => {
+    await api.logout();
+    setAuth({ state: 'ready', mode: config?.auth?.mode ?? null, user: null, limitations: [] });
+    setMaterials([]);
+    setMaterialIndex(null);
+    setMaterialsState('ready');
+    notify('Signed out. Your data stays in your account.', 'info');
+  }, [config?.auth?.mode, notify]);
+
+  const setTheme = useCallback((next) => {
+    setThemeState(persistTheme(next));
+  }, []);
+
+  const setLanguage = useCallback(
+    (next) => {
+      const applied = persistLanguage(next);
+      setLanguageState(applied);
+      // A signed-in learner's choice follows them to other devices. A failure
+      // here must not undo the local choice, so it is reported and ignored.
+      if (auth.user) {
+        api.updateProfile({ language: applied }).catch(() => {
+          notify('Language changed here, but could not be saved to your account.', 'warning');
+        });
+      }
+      return applied;
+    },
+    [auth.user, notify],
+  );
+
+  const updateProfile = useCallback(
+    async (patch) => {
+      const result = await api.updateProfile(patch);
+      setAuth((current) =>
+        current.user
+          ? { ...current, user: { ...current.user, ...result.user, profile: result.user.profile } }
+          : current,
+      );
+      return result.user;
+    },
+    [],
+  );
+
+  const deleteAccount = useCallback(
+    async (payload) => {
+      const result = await api.deleteAccount(payload);
+      setAuth({ state: 'ready', mode: config?.auth?.mode ?? null, user: null, limitations: [] });
+      setMaterials([]);
+      setMaterialIndex(null);
+      setMaterialsState('ready');
+      return result;
+    },
+    [config?.auth?.mode],
+  );
 
   const setProfile = useCallback(
     (raw) => {
@@ -174,10 +302,23 @@ export function AppProvider({ children }) {
     [notify],
   );
 
+  const t = useMemo(() => createTranslator(language), [language]);
+
   const value = useMemo(
     () => ({
       learnerId,
       setProfile,
+      auth,
+      signIn,
+      registerAccount,
+      signOut,
+      theme,
+      setTheme,
+      language,
+      setLanguage,
+      t,
+      updateProfile,
+      deleteAccount,
       config,
       health,
       ai: config?.ai ?? null,
@@ -209,6 +350,17 @@ export function AppProvider({ children }) {
     [
       learnerId,
       setProfile,
+      auth,
+      signIn,
+      registerAccount,
+      signOut,
+      theme,
+      setTheme,
+      language,
+      setLanguage,
+      t,
+      updateProfile,
+      deleteAccount,
       config,
       health,
       materials,

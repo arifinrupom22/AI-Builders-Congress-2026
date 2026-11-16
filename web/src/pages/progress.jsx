@@ -20,7 +20,71 @@ import {
   ProgressBar,
   StatTile,
 } from '../components/ui.jsx';
-import { dayLabel, formatNumber, formatPercent, formatRelative, pluralise, truncate } from '../lib/format.js';
+import { dayLabel, formatDueIn, formatNumber, formatPercent, formatRelative, pluralise, truncate } from '../lib/format.js';
+
+/**
+ * Entry point to the "Due for review" queue: live counts from the server and
+ * a link into it. The numbers are only ever the server's own schedule, so an
+ * empty queue says when the next card is due instead of looking broken.
+ */
+function ReviewQueueCard() {
+  const { learnerId } = useApp();
+  const [summary, setSummary] = useState(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setSummary(null);
+    setFailed(false);
+    api
+      .dueFlashcards({ summary: true })
+      .then((queue) => {
+        if (alive) setSummary(queue);
+      })
+      .catch(() => {
+        if (alive) setFailed(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [learnerId]);
+
+  const counts = summary?.counts;
+
+  return (
+    <Card
+      title="Due for review"
+      subtitle="Cards your own ratings have scheduled to come back."
+      actions={
+        <a className="ls-link" href="#/review">
+          Open the queue <Icon name="chevronRight" size={14} />
+        </a>
+      }
+    >
+      {failed ? (
+        <p className="muted">The queue could not be counted right now — opening it will try again.</p>
+      ) : !summary ? (
+        <LoadingPanel label="Checking what is due" rows={1} />
+      ) : (counts?.totalCards ?? 0) === 0 ? (
+        <p className="muted">
+          No flashcards yet. Build a deck and rate a card and the schedule starts from your own answer.
+        </p>
+      ) : counts.actionable > 0 ? (
+        <p className="muted">
+          <strong>{counts.actionable}</strong> card{pluralise(counts.actionable, '', 's')} ready now
+          {counts.due > 0 ? ` · ${counts.due} past due` : ''}
+          {counts.newCards > 0 ? ` · ${counts.newCards} never rated` : ''}.
+        </p>
+      ) : (
+        <p className="muted">
+          Nothing due right now
+          {summary.nextDueAt ? ` — next card ${formatDueIn(summary.nextDueAt)}` : ''}
+          {counts.upcoming > 0 ? ` · ${counts.upcoming} scheduled later` : ''}.
+        </p>
+      )}
+    </Card>
+  );
+}
 
 function ActivityChart({ activity, streakDays }) {
   const max = Math.max(1, ...activity.map((d) => d.quizzes + d.sessions + d.uploads));
@@ -123,6 +187,7 @@ export default function ProgressPage() {
             </a>
           }
         />
+        <ReviewQueueCard />
         <Alert tone="info" title="What this page will show">
           <p>{overview.disclaimer}</p>
         </Alert>
@@ -143,6 +208,8 @@ export default function ProgressPage() {
           icon="target"
         />
       </section>
+
+      <ReviewQueueCard />
 
       <Card title="Study activity" subtitle="The last 14 days, built only from recorded events.">
         <ActivityChart activity={overview.activity} streakDays={overview.streakDays} />

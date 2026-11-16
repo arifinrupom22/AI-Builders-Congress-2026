@@ -24,6 +24,14 @@ const STOPWORDS = new Set([
   'কে', 'কেন', 'কিভাবে', 'কীভাবে', 'কোন', 'কোনটি', 'থেকে', 'জন্য', 'সাথে', 'মধ্যে', 'উপর', 'নিচে', 'আর', 'তার', 'আমি', 'আমরা',
   'আপনি', 'তুমি', 'সে', 'তারা', 'নয়', 'না', 'ব্যাখ্যা', 'কর', 'করা', 'করো', 'দাও', 'বলো',
   'এটি', 'সেটি', 'ওটি', 'করে', 'করি', 'দিয়ে', 'হচ্ছে', 'হয়েছে', 'কেমন', 'কতটা',
+  // Banglish (Bangla written in Latin letters). These are question/function
+  // words, not content: leaving them in a query lowers passage coverage and
+  // makes an answer the material DOES support look unsupported.
+  'ki', 'kii', 'kivabe', 'kivhabe', 'kibhabe', 'keno', 'kano', 'kemon', 'kotha', 'ktha',
+  'mane', 'bolo', 'bolun', 'dao', 'din', 'koro', 'korbo', 'kore', 'kora', 'korte', 'korle',
+  'ache', 'aache', 'achhe', 'hoy', 'hoi', 'hobe', 'holo', 'chilo', 'theke', 'jonno', 'jonyo',
+  'sathe', 'moddhe', 'upor', 'niche', 'ami', 'amra', 'apni', 'tumi', 'tara', 'nei', 'nai',
+  'bujhao', 'bujha', 'bujhte', 'likho', 'likhun', 'kothay', 'kothae', 'ktota', 'koto',
 ]);
 
 // \p{M} (combining marks) must be included or Brahmic scripts fall apart:
@@ -159,3 +167,57 @@ export function detectLanguage(text) {
 }
 
 export const STOPWORD_LIST = STOPWORDS;
+
+/**
+ * Query normalisation for Banglish and spelling variants.
+ *
+ * This is deliberately a small, inspectable table rather than a transliteration
+ * engine. It maps spellings that appear in student queries ("mechatronix",
+ * "photosinthesis", American -ize forms in British material, common typos) onto
+ * the token the corpus is likely to use. Expansions are added to the query, not
+ * substituted: the original wording is untouched, and a passage still has to
+ * pass the confidence threshold on its own.
+ *
+ * Full Bangla<->Latin transliteration is NOT implemented; the README says so.
+ */
+const QUERY_ALIASES = new Map([
+  ['mechatronix', 'mechatronics'],
+  ['mechatroniks', 'mechatronics'],
+  ['mechatronic', 'mechatronics'],
+  ['photosinthesis', 'photosynthesis'],
+  ['photosynthasis', 'photosynthesis'],
+  ['fotosynthesis', 'photosynthesis'],
+  ['defination', 'definition'],
+  ['definations', 'definition'],
+  ['definaton', 'definition'],
+  ['sensores', 'sensors'],
+  ['sensor', 'sensor'],
+  ['normalization', 'normalisation'],
+  ['organization', 'organisation'],
+  ['analyze', 'analyse'],
+  ['recognize', 'recognise'],
+  ['summarize', 'summarise'],
+  ['optimize', 'optimise'],
+  ['characterize', 'characterise'],
+]);
+
+/**
+ * Extra search terms for a query. Callers decide whether to use them (the
+ * retrieval service only keeps ones that exist in the index).
+ */
+export function expandQuery(query) {
+  const base = new Set(contentTokens(query));
+  const out = new Set();
+  for (const token of base) {
+    const alias = QUERY_ALIASES.get(token);
+    if (alias && !base.has(alias)) out.add(alias);
+    // British spellings are common in this corpus; normalise American forms.
+    if (token.endsWith('ization') && token.length > 12) out.add(`${token.slice(0, -7)}isation`);
+    if (token.endsWith('ize') && token.length > 6) out.add(`${token.slice(0, -3)}ise`);
+  }
+  return [...out];
+}
+
+export function queryAliases() {
+  return new Map(QUERY_ALIASES);
+}

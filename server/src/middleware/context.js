@@ -1,10 +1,20 @@
 /**
  * Per-request context: request id, learner scoping, and rate limiting.
  *
- * The learner id is asserted by the client (X-Learner-Id). That is a
- * data-scoping mechanism for a single-user local deployment, not authentication.
- * It is sanitised to a strict character set and length so it can never be used
- * as a path or a key injection vector, and every store query filters on it.
+ * Identity comes from middleware/auth.js. This module only sanitises the
+ * client-asserted profile id for local mode and provides the limiter.
+ *
+ * Rate limiting has two independent dimensions:
+ *   - `ip`      — a hard ceiling per connection address. It cannot be reset by
+ *                 changing a header, which is what makes it a real ceiling.
+ *   - `learner` — fairness per study profile / signed-in account. In local mode
+ *                 this key is client-supplied, so it smooths traffic but is not
+ *                 a security boundary; in account mode the server has already
+ *                 verified it.
+ *
+ * `req.ip` only reflects X-Forwarded-For when TRUST_PROXY is set to a hop count
+ * (see config.js). A default deployment therefore cannot be tricked into a new
+ * address by sending that header.
  */
 import crypto from 'node:crypto';
 import AppError from '../errors.js';
@@ -39,8 +49,12 @@ export function requestContext(logger) {
  * Single-process only by design; documented as such. A multi-instance
  * deployment must move this to shared storage.
  */
-export function rateLimit({ windowMs = 60_000, max = 120, keyFn = (req) => `${req.learnerId}:${req.ip}` } = {}) {
+export function rateLimit({ windowMs = 60_000, max = 120, scope = 'learner', name = 'api' } = {}) {
   const hits = new Map();
+  // A client can invent unlimited learner ids, so the map is bounded. Oldest
+  // entries are dropped first; dropping a counter can only be more permissive,
+  // and the per-IP cap in the same route still applies.
+  const MAX_KEYS = 10_000;
 
   const sweep = setInterval(() => {
     const cutoff = Date.now() - windowMs;
@@ -48,22 +62,35 @@ export function rateLimit({ windowMs = 60_000, max = 120, keyFn = (req) => `${re
   }, windowMs * 2);
   sweep.unref?.();
 
+  function keyFor(req) {
+    if (scope === 'ip') return `ip:${req.ip ?? 'unknown'}`;
+    if (req.auth?.user?.id) return `user:${req.auth.user.id}`;
+    return `learner:${req.learnerId}`;
+  }
+
   return (req, res, next) => {
-    const key = keyFn(req);
+    const key = keyFor(req);
     const now = Date.now();
     const entry = hits.get(key);
 
     if (!entry || now - entry.start >= windowMs) {
+      if (hits.size >= MAX_KEYS) {
+        let drop = Math.ceil(MAX_KEYS / 10);
+        for (const k of hits.keys()) {
+          hits.delete(k);
+          if (--drop <= 0) break;
+        }
+      }
       hits.set(key, { start: now, count: 1 });
-      res.setHeader('X-RateLimit-Limit', String(max));
-      res.setHeader('X-RateLimit-Remaining', String(max - 1));
+      res.setHeader(`X-RateLimit-${name}-Limit`, String(max));
+      res.setHeader(`X-RateLimit-${name}-Remaining`, String(max - 1));
       return next();
     }
 
     entry.count += 1;
     const remaining = Math.max(0, max - entry.count);
-    res.setHeader('X-RateLimit-Limit', String(max));
-    res.setHeader('X-RateLimit-Remaining', String(remaining));
+    res.setHeader(`X-RateLimit-${name}-Limit`, String(max));
+    res.setHeader(`X-RateLimit-${name}-Remaining`, String(remaining));
 
     if (entry.count > max) {
       const retryAfter = Math.ceil((entry.start + windowMs - now) / 1000);

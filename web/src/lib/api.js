@@ -14,6 +14,21 @@ const LEARNER_STORAGE_KEY = 'learnsphere.learnerId';
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '');
 export const DEFAULT_LEARNER_ID = 'local';
 const LEARNER_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+/**
+ * The CSRF token is issued by the server as a readable cookie and echoed back
+ * in a header. The HttpOnly session cookie is what actually authenticates; the
+ * header proves the request came from this origin's own JavaScript.
+ */
+function csrfToken() {
+  try {
+    const match = document.cookie.match(/(?:^|;\s*)ls_csrf=([^;]+)/);
+    return match ? decodeURIComponent(match[1]) : null;
+  } catch {
+    return null;
+  }
+}
 
 /** A failed API call, with the server's machine-readable code attached. */
 export class ApiError extends Error {
@@ -81,6 +96,10 @@ function buildQuery(params) {
  */
 async function request(path, { method = 'GET', body, signal, acceptStatuses = [] } = {}) {
   const headers = { 'X-Learner-Id': getLearnerId(), Accept: 'application/json' };
+  if (!SAFE_METHODS.has(method)) {
+    const token = csrfToken();
+    if (token) headers['X-CSRF-Token'] = token;
+  }
   let payload;
   if (body instanceof FormData) {
     payload = body; // let the browser set the multipart boundary
@@ -91,7 +110,15 @@ async function request(path, { method = 'GET', body, signal, acceptStatuses = []
 
   let response;
   try {
-    response = await fetch(`${API_BASE_URL}/api${path}`, { method, headers, body: payload, signal });
+    // Cookies are how a signed-in account's session travels; in local mode
+    // there is simply no session cookie to send.
+    response = await fetch(`${API_BASE_URL}/api${path}`, {
+      method,
+      headers,
+      body: payload,
+      signal,
+      credentials: 'include',
+    });
   } catch (err) {
     if (err?.name === 'AbortError') throw err;
     throw new ApiError(
@@ -135,6 +162,23 @@ async function request(path, { method = 'GET', body, signal, acceptStatuses = []
 }
 
 export const api = {
+  // --- accounts -------------------------------------------------------------
+  /** Always 200; `user` is null when signed out. */
+  session: () => request('/auth/session'),
+  login: (payload) => request('/auth/login', { method: 'POST', body: payload }),
+  register: (payload) => request('/auth/register', { method: 'POST', body: payload }),
+  logout: () => request('/auth/logout', { method: 'POST', body: {} }),
+  requestPasswordReset: (email) =>
+    request('/auth/password-reset/request', { method: 'POST', body: { email } }),
+  confirmPasswordReset: (payload) =>
+    request('/auth/password-reset/confirm', { method: 'POST', body: payload }),
+
+  // --- account ---------------------------------------------------------------
+  account: () => request('/account'),
+  updateProfile: (patch) => request('/account/profile', { method: 'PATCH', body: patch }),
+  exportAccount: () => request('/account/export'),
+  deleteAccount: (payload = {}) => request('/account', { method: 'DELETE', body: payload }),
+
   // --- system ---------------------------------------------------------------
   config: () => request('/config'),
   health: () => request('/health'),
@@ -155,6 +199,9 @@ export const api = {
     return request('/materials', { method: 'POST', body: form, signal, acceptStatuses: [422] });
   },
   deleteMaterial: (id) => request(`/materials/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  /** Learner-set organisation: subject, tags, pinned. Content is untouched. */
+  organiseMaterial: (id, patch) =>
+    request(`/materials/${encodeURIComponent(id)}`, { method: 'PATCH', body: patch }),
 
   // --- AI teacher -----------------------------------------------------------
   ask: (payload) => request('/chat', { method: 'POST', body: payload }),
@@ -166,16 +213,96 @@ export const api = {
   generateQuiz: (payload) => request('/quiz/generate', { method: 'POST', body: payload }),
   listQuizzes: () => request('/quiz'),
   getQuiz: (id) => request(`/quiz/${encodeURIComponent(id)}`),
-  submitQuiz: (id, answers) =>
-    request(`/quiz/${encodeURIComponent(id)}/submit`, { method: 'POST', body: { answers } }),
+  /** Concept-level feedback for one wrong answer; confidence is context only. */
+  diagnoseGap: (id, { questionId, confidence = null }) =>
+    request(`/quiz/${encodeURIComponent(id)}/gap`, {
+      method: 'POST',
+      body: { questionId, confidence },
+    }),
+  /** `elapsedSeconds` is context for the optional study timer, never a score input. */
+  submitQuiz: (id, answers, elapsedSeconds = null) =>
+    request(`/quiz/${encodeURIComponent(id)}/submit`, {
+      method: 'POST',
+      body: { answers, ...(elapsedSeconds != null ? { elapsedSeconds } : {}) },
+    }),
+
+  // --- flashcards ----------------------------------------------------------
+  generateFlashcards: (payload) => request('/flashcards/generate', { method: 'POST', body: payload }),
+  listFlashcardDecks: () => request('/flashcards'),
+  getFlashcardDeck: (id) => request(`/flashcards/${encodeURIComponent(id)}`),
+  reviewFlashcards: (id, results) =>
+    request(`/flashcards/${encodeURIComponent(id)}/review`, { method: 'POST', body: { results } }),
+  deleteFlashcardDeck: (id) => request(`/flashcards/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  /** The "Due for review" queue. `summary` asks for counts only (entry points). */
+  dueFlashcards: ({ limit, summary } = {}) =>
+    request(`/flashcards/due${buildQuery({ limit, summary: summary ? '1' : undefined })}`),
+  /** Push one card's due date later. Records no rating. */
+  snoozeFlashcard: (id, cardId, minutes) =>
+    request(`/flashcards/${encodeURIComponent(id)}/snooze`, {
+      method: 'POST',
+      body: { cardId, ...(minutes ? { minutes } : {}) },
+    }),
 
   // --- study summaries ------------------------------------------------------
   summarise: (payload) => request('/summary', { method: 'POST', body: payload }),
   summaryOptions: () => request('/summary/meta/options'),
 
+  // --- Visual Study Studio --------------------------------------------------
+  /** Builds one source-grounded visual; 422 explains what the material lacks. */
+  generateVisual: (payload) => request('/visuals/generate', { method: 'POST', body: payload }),
+  visualOptions: () => request('/visuals/meta/options'),
+  listVisuals: () => request('/visuals'),
+  getVisual: (id) => request(`/visuals/${encodeURIComponent(id)}`),
+  deleteVisual: (id) => request(`/visuals/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  // --- guided learning path -------------------------------------------------
+  /** Builds a grounded path; 422 explains what the material does not cover. */
+  generatePath: (payload) => request('/learning-path/generate', { method: 'POST', body: payload }),
+  listPaths: () => request('/learning-path'),
+  getPath: (id) => request(`/learning-path/${encodeURIComponent(id)}`),
+  deletePath: (id) => request(`/learning-path/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  /** Marks one step done or not done — the learner's own record, never scored. */
+  setStepCompleted: (id, stepId, completed) =>
+    request(`/learning-path/${encodeURIComponent(id)}/progress`, {
+      method: 'PATCH',
+      body: { stepId, completed },
+    }),
+  /** Builds a step's studio visual once; the result is stored on the path. */
+  generateStepVisual: (id, stepId) =>
+    request(`/learning-path/${encodeURIComponent(id)}/steps/${encodeURIComponent(stepId)}/visual`, {
+      method: 'POST',
+      body: {},
+    }),
+
   // --- progress -------------------------------------------------------------
   progress: () => request('/progress'),
   revision: () => request('/progress/revision'),
+
+  // --- learning DNA ---------------------------------------------------------
+  /** Read-only evidence profile derived from this profile's attempts and ratings. */
+  learningDna: () => request('/dna'),
+
+  // --- adaptive exam coach --------------------------------------------------
+  /** The next recommended quiz and the plan behind it; read-only. */
+  coachPlan: () => request('/coach/plan'),
+
+  // --- teach-back ------------------------------------------------------------
+  /** Word-level, source-grounded feedback; read-only and never graded. */
+  teachBack: (payload) => request('/teachback', { method: 'POST', body: payload }),
+
+  // --- study plan -----------------------------------------------------------
+  listPlans: () => request('/plan'),
+  planToday: () => request('/plan/today'),
+  getPlan: (id) => request(`/plan/${encodeURIComponent(id)}`),
+  createPlan: (payload) => request('/plan', { method: 'POST', body: payload }),
+  updatePlan: (id, patch) => request(`/plan/${encodeURIComponent(id)}`, { method: 'PATCH', body: patch }),
+  setPlanTask: (id, taskId, status) =>
+    request(`/plan/${encodeURIComponent(id)}/tasks/${encodeURIComponent(taskId)}`, {
+      method: 'PATCH',
+      body: { status },
+    }),
+  refreshPlan: (id) => request(`/plan/${encodeURIComponent(id)}/refresh`, { method: 'POST', body: {} }),
+  deletePlan: (id) => request(`/plan/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };
 
 export default api;

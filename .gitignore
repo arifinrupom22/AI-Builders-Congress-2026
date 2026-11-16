@@ -1,3 +1,5 @@
+.freebuff/
+.freebuff
 # --- Secrets: NEVER commit these ---
 .env
 .env.local

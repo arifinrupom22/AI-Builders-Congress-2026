@@ -27,8 +27,15 @@ const { createRetrievalService } = await import('../../src/retrieval/service.js'
 const { createProvider } = await import('../../src/ai/provider.js');
 const { createTeacher } = await import('../../src/ai/teacher.js');
 const { createQuizService } = await import('../../src/quiz/generator.js');
+const { createFlashcardService } = await import('../../src/flashcards/service.js');
 const { createSummaryService } = await import('../../src/summary/service.js');
+const { createVisualsService } = await import('../../src/visuals/service.js');
+const { createLearningPathService } = await import('../../src/learningpath/service.js');
 const { createProgressService } = await import('../../src/progress/service.js');
+const { createDnaService } = await import('../../src/dna/service.js');
+const { createCoachService } = await import('../../src/coach/service.js');
+const { createPlannerService } = await import('../../src/planner/service.js');
+const { createTeachbackService } = await import('../../src/teachback/service.js');
 const { createApp } = await import('../../src/app.js');
 
 export const DEFAULT_LEARNER = 'test-learner';
@@ -56,6 +63,15 @@ function makeClient(baseUrl) {
       return json(
         await fetch(`${baseUrl}${pathname}`, {
           method: 'POST',
+          headers: headers(learnerId, { 'content-type': 'application/json' }),
+          body: JSON.stringify(body ?? {}),
+        }),
+      );
+    },
+    async patch(pathname, body, learnerId = DEFAULT_LEARNER) {
+      return json(
+        await fetch(`${baseUrl}${pathname}`, {
+          method: 'PATCH',
           headers: headers(learnerId, { 'content-type': 'application/json' }),
           body: JSON.stringify(body ?? {}),
         }),
@@ -90,6 +106,8 @@ export async function createCore({ env = {} } = {}) {
     limits: { ...config.limits, ...(env.limits ?? {}) },
     upload: { ...config.upload, ...(env.upload ?? {}) },
     retrieval: { ...config.retrieval, ...(env.retrieval ?? {}) },
+    auth: { ...config.auth, ...(env.auth ?? {}) },
+    trustProxy: env.trustProxy ?? 0,
     ai: env.ai ?? config.ai,
   };
 
@@ -99,8 +117,22 @@ export async function createCore({ env = {} } = {}) {
   const provider = createProvider(testConfig.ai, logger);
   const teacher = createTeacher({ retrieval, provider, config: testConfig, logger });
   const quizService = createQuizService({ retrieval, provider, config: testConfig, logger, store });
+  const flashcardService = createFlashcardService({ retrieval, provider, config: testConfig, logger, store });
   const summaryService = createSummaryService({ store, retrieval, provider, config: testConfig, logger });
+  const visualsService = createVisualsService({ retrieval, provider, config: testConfig, logger, store });
+  const learningPathService = createLearningPathService({
+    retrieval,
+    provider,
+    config: testConfig,
+    logger,
+    store,
+    visualsService,
+  });
   const progressService = createProgressService({ store });
+  const dnaService = createDnaService({ store });
+  const plannerService = createPlannerService({ store, retrieval, dnaService, flashcardService, config: testConfig });
+  const teachbackService = createTeachbackService({ retrieval, config: testConfig });
+  const coachService = createCoachService({ store, dnaService, flashcardService, plannerService });
 
   return {
     dir,
@@ -111,8 +143,15 @@ export async function createCore({ env = {} } = {}) {
     provider,
     teacher,
     quizService,
+    flashcardService,
     summaryService,
+    visualsService,
+    learningPathService,
     progressService,
+    dnaService,
+    coachService,
+    plannerService,
+    teachbackService,
     async close() {
       await fs.rm(dir, { recursive: true, force: true });
     },
@@ -121,7 +160,23 @@ export async function createCore({ env = {} } = {}) {
 
 export async function createHarness({ env = {} } = {}) {
   const core = await createCore({ env });
-  const { config: testConfig, logger, store, retrieval, teacher, quizService, summaryService, progressService } = core;
+  const {
+    config: testConfig,
+    logger,
+    store,
+    retrieval,
+    teacher,
+    quizService,
+    flashcardService,
+    summaryService,
+    visualsService,
+    learningPathService,
+    progressService,
+    dnaService,
+    coachService,
+    plannerService,
+    teachbackService,
+  } = core;
 
   const app = createApp({
     config: testConfig,
@@ -130,8 +185,15 @@ export async function createHarness({ env = {} } = {}) {
     retrieval,
     teacher,
     quizService,
+    flashcardService,
     summaryService,
+    visualsService,
+    learningPathService,
     progressService,
+    dnaService,
+    coachService,
+    plannerService,
+    teachbackService,
   });
   const server = app.listen(0, '127.0.0.1');
   await once(server, 'listening');

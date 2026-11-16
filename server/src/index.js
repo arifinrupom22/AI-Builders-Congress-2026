@@ -11,8 +11,15 @@ import { createRetrievalService } from './retrieval/service.js';
 import { createProvider } from './ai/provider.js';
 import { createTeacher } from './ai/teacher.js';
 import { createQuizService } from './quiz/generator.js';
+import { createFlashcardService } from './flashcards/service.js';
 import { createSummaryService } from './summary/service.js';
+import { createVisualsService } from './visuals/service.js';
+import { createLearningPathService } from './learningpath/service.js';
 import { createProgressService } from './progress/service.js';
+import { createDnaService } from './dna/service.js';
+import { createCoachService } from './coach/service.js';
+import { createPlannerService } from './planner/service.js';
+import { createTeachbackService } from './teachback/service.js';
 import { createApp } from './app.js';
 
 const logger = createLogger({ level: process.env.LOG_LEVEL ?? (config.env === 'production' ? 'info' : 'debug') });
@@ -22,8 +29,22 @@ const retrieval = createRetrievalService({ store, config, logger });
 const provider = createProvider(config.ai, logger);
 const teacher = createTeacher({ retrieval, provider, config, logger });
 const quizService = createQuizService({ retrieval, provider, config, logger, store });
+const flashcardService = createFlashcardService({ retrieval, provider, config, logger, store });
 const summaryService = createSummaryService({ store, retrieval, provider, config, logger });
+const visualsService = createVisualsService({ retrieval, provider, config, logger, store });
+const learningPathService = createLearningPathService({
+  retrieval,
+  provider,
+  config,
+  logger,
+  store,
+  visualsService,
+});
 const progressService = createProgressService({ store });
+const dnaService = createDnaService({ store });
+const plannerService = createPlannerService({ store, retrieval, dnaService, flashcardService, config });
+const teachbackService = createTeachbackService({ retrieval, config });
+const coachService = createCoachService({ store, dnaService, flashcardService, plannerService });
 
 const app = createApp({
   config,
@@ -32,8 +53,15 @@ const app = createApp({
   retrieval,
   teacher,
   quizService,
+  flashcardService,
   summaryService,
+  visualsService,
+  learningPathService,
   progressService,
+  dnaService,
+  coachService,
+  plannerService,
+  teachbackService,
   startedAt: Date.now(),
 });
 
@@ -48,6 +76,17 @@ const server = app.listen(config.port, () => {
   // different port than I set?" has an answer in the log.
   for (const warning of config.warnings ?? []) {
     logger.warn('environment value ignored', { detail: warning });
+  }
+
+  if (config.auth.mode === 'local') {
+    logger.warn('authentication is off (AUTH_MODE=local)', {
+      effect:
+        'Requests are scoped by a browser-asserted study profile; anyone who can reach this API can use any profile id. Set AUTH_MODE=required before exposing this server.',
+    });
+  } else {
+    logger.info('accounts required', {
+      effect: 'Every API route except health, config and auth needs a signed-in account.',
+    });
   }
 
   if (config.ai.configured) {

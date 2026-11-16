@@ -165,6 +165,122 @@ const ICONS = {
       <path d="M6 5h10l-1.5 3.5L16 12H6" />
     </>
   ),
+  pin: (
+    <>
+      <path d="M9 4h6l-.7 5 3.2 3.2V14H6.5v-1.8L9.7 9z" />
+      <path d="M12 14v6" />
+    </>
+  ),
+  tag: (
+    <>
+      <path d="M4 4h7l9 9-7 7-9-9z" />
+      <path d="M8.2 8.2h.01" />
+    </>
+  ),
+  folder: (
+    <>
+      <path d="M4 6.5A1.5 1.5 0 0 1 5.5 5h3.8l2 2.5h7.2A1.5 1.5 0 0 1 20 9v8.5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z" />
+    </>
+  ),
+  cards: (
+    <>
+      <rect x="3" y="7" width="14" height="12" rx="2" />
+      <path d="M7 4h11a2 2 0 0 1 2 2v10" />
+      <path d="M7 12h6M7 15.5h4" />
+    </>
+  ),
+  eye: (
+    <>
+      <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" />
+      <circle cx="12" cy="12" r="3" />
+    </>
+  ),
+  // Concept-map glyph: one node connected to two children.
+  sitemap: (
+    <>
+      <rect x="9" y="3.5" width="6" height="5" rx="1.2" />
+      <rect x="3" y="15.5" width="6" height="5" rx="1.2" />
+      <rect x="15" y="15.5" width="6" height="5" rx="1.2" />
+      <path d="M12 8.5v3.5M6 15.5v-3.5h12v3.5" />
+    </>
+  ),
+  // Learning DNA glyph: a double helix with two rungs.
+  dna: (
+    <>
+      <path d="M8 3c0 6 8 9 8 14M16 3c0 6-8 9-8 14" />
+      <path d="M9.2 7.2h5.6M8.6 11h6.8M9.6 14.8h4.8" />
+    </>
+  ),
+  // Learning-path glyph: a winding route between three waypoints.
+  route: (
+    <>
+      <circle cx="5.5" cy="18.5" r="2.2" />
+      <circle cx="18.5" cy="5.5" r="2.2" />
+      <path d="M7.7 18.5c4.4 0 3.1-5.5 6.8-5.5 2.6 0 1.6-5.5 4-5.5" />
+      <circle cx="12.9" cy="15.6" r="1.4" />
+    </>
+  ),
+  sun: (
+    <>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2.8v2M12 19.2v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.8 12h2M19.2 12h2M4.6 19.4 6 18M18 6l1.4-1.4" />
+    </>
+  ),
+  moon: <path d="M20 14.5A8 8 0 0 1 9.5 4a8.2 8.2 0 1 0 10.5 10.5Z" />,
+  monitor: (
+    <>
+      <rect x="3.5" y="4.5" width="17" height="11.5" rx="2" />
+      <path d="M9 20h6M12 16v4" />
+    </>
+  ),
+  globe: (
+    <>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M3.5 12h17M12 3.5c2.4 2.3 3.6 5.2 3.6 8.5S14.4 18.2 12 20.5c-2.4-2.3-3.6-5.2-3.6-8.5S9.6 5.8 12 3.5Z" />
+    </>
+  ),
+  eyeOff: (
+    <>
+      <path d="M4 4.5 20 19.5" />
+      <path d="M9.9 6c.7-.2 1.4-.3 2.1-.3 6 0 9.5 6.3 9.5 6.3a17 17 0 0 1-3 3.7" />
+      <path d="M6.4 8.1A17.6 17.6 0 0 0 2.5 12S6 18.3 12 18.3c1.3 0 2.5-.3 3.6-.7" />
+      <path d="M10 10.2a2.7 2.7 0 0 0 3.7 3.7" />
+    </>
+  ),
+  logOut: (
+    <>
+      <path d="M9 4H6a1.5 1.5 0 0 0-1.5 1.5v13A1.5 1.5 0 0 0 6 20h3" />
+      <path d="M14 8l4 4-4 4M9 12h9" />
+    </>
+  ),
+  arrowRight: <path d="M4.5 12h15M13.5 6l6 6-6 6" />,
+  mail: (
+    <>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="m3.8 6.5 8.2 6 8.2-6" />
+    </>
+  ),
+  lock: (
+    <>
+      <rect x="4.5" y="10.5" width="15" height="10" rx="2" />
+      <path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" />
+    </>
+  ),
+  download: (
+    <>
+      <path d="M12 4v11" />
+      <path d="m7.5 10.5 4.5 4.5 4.5-4.5" />
+      <path d="M4 19h16" />
+    </>
+  ),
+  // Calendar glyph, used for the study plan.
+  calendar: (
+    <>
+      <rect x="3.5" y="5" width="17" height="15.5" rx="2.4" />
+      <path d="M3.5 9.6h17M8 3.5v3M16 3.5v3" />
+      <path d="M7.5 13.2h2.2M12 13.2h2.2M16.4 13.2h.1M7.5 17h2.2M12 17h2.2" />
+    </>
+  ),
 };
 
 export function Icon({ name, size = 20, title, className = '', ...rest }) {
