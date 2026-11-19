@@ -313,7 +313,9 @@ until a request succeeds. There is no asynchronous job/status flow in this build
 
 ## Privacy
 
-- With no provider key, nothing leaves the machine.
+- With no provider key, no study content leaves the machine. The only external
+  request the interface makes is for its web fonts (Google Fonts); uploads,
+  questions and generated answers stay local.
 - With a provider, only the retrieved passages for one request are sent. Uploaded files are
   never sent whole, and the rest of the library is never sent.
 - The API never logs question text, document content or keys. Request logs contain only method,

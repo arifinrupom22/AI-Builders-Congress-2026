@@ -36,9 +36,11 @@ const SPA_CSP = [
   "default-src 'self'",
   "script-src 'self'",
   // React sets the style attribute, which requires 'unsafe-inline' for styles.
-  "style-src 'self' 'unsafe-inline'",
+  // The two font hosts are the faces named in web/index.html; without them the
+  // stylesheet is parsed but every font request is refused.
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "img-src 'self' data:",
-  "font-src 'self'",
+  "font-src 'self' https://fonts.gstatic.com",
   "connect-src 'self'",
   "object-src 'none'",
   "base-uri 'none'",

@@ -21,11 +21,30 @@ export function buildAllowedOrigins({ env, port, corsAllowedOrigins = [] }) {
   return [...dev];
 }
 
+/**
+ * Is this Origin the same host the request was sent to?
+ *
+ * Same-origin requests are not CORS requests, and must never be checked against
+ * the cross-origin allowlist. Browsers send `Origin` even for module scripts and
+ * stylesheets (Vite emits `<script type="module">` and `crossorigin` stylesheet
+ * links), so rejecting every Origin rejected the production build's own JS and
+ * CSS: the SPA loaded unstyled and never mounted.
+ */
+function isSameOrigin(req, origin) {
+  try {
+    const host = req.headers.host;
+    return Boolean(host) && new URL(origin).host === host;
+  } catch {
+    return false;
+  }
+}
+
 export function corsGuard(allowedOrigins) {
   const allowed = new Set(allowedOrigins);
   return (req, res, next) => {
     const origin = req.headers.origin;
     if (!origin) return next(); // same-origin, curl, server-to-server
+    if (isSameOrigin(req, origin)) return next(); // own assets and own API
     if (!allowed.has(origin)) {
       return next(
         new AppError('This origin is not allowed to call the LearnSphere AI API.', {
