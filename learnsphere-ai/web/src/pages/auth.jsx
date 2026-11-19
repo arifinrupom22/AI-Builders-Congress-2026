@@ -10,6 +10,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../store/AppContext.jsx';
 import { PublicChrome } from '../components/PublicChrome.jsx';
 import { Icon } from '../components/Icons.jsx';
+import { BrandLogo } from '../components/BrandLogo.jsx';
 import { Alert, Button, Field } from '../components/ui.jsx';
 import { api } from '../lib/api.js';
 import { navigate } from '../lib/router.jsx';
@@ -145,7 +146,8 @@ function LoginForm({ next }) {
 }
 
 function SignupForm({ next }) {
-  const { t, registerAccount } = useApp();
+  const { t, registerAccount, config } = useApp();
+  const invitationOnly = config?.auth?.invitationOnly !== false;
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -176,6 +178,12 @@ function SignupForm({ next }) {
   return (
     <form className="auth__form" onSubmit={submit} noValidate>
       <AuthError error={error} title={t('auth.signupFailed')} />
+
+      {invitationOnly ? (
+        <Alert tone="info" title={t('auth.inviteOnlyTitle')}>
+          <p>{t('auth.inviteOnlyBody')}</p>
+        </Alert>
+      ) : null}
 
       <Field label={t('auth.displayName')} hint={t('auth.displayNameHint')}>
         {({ id, ...aria }) => (
@@ -412,16 +420,12 @@ export default function AuthPage({ route }) {
     setAnnounce(title);
   }, [view, t]);
 
-  const demoMode = config?.auth?.mode !== 'required';
-
   return (
     <PublicChrome>
       <div className="auth">
         <div className="auth__panel">
           <div className="auth__brand">
-            <span className="auth__mark" aria-hidden="true">
-              <Icon name="compass" size={24} />
-            </span>
+            <BrandLogo size={46} />
             <div>
               <h1>
                 {view === 'signup' ? t('auth.signupTitle') : view === 'reset' ? t('reset.title') : t('auth.loginTitle')}
@@ -435,14 +439,6 @@ export default function AuthPage({ route }) {
           <p className="visually-hidden" role="status" aria-live="polite">
             {announce}
           </p>
-
-          {demoMode ? (
-            <Alert tone="warning" title={t('auth.demoNotice')}>
-              <p>
-                <a href="#/dashboard">{t('welcome.ctaDemo')}</a>
-              </p>
-            </Alert>
-          ) : null}
 
           {view === 'login' ? <LoginForm next={next} /> : null}
           {view === 'signup' ? <SignupForm next={next} /> : null}

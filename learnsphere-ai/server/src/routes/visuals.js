@@ -25,6 +25,8 @@ const generateSchema = z.object({
     })
     .optional()
     .default(DEFAULT_VISUAL_KIND),
+  // "auto" follows the material; "en"/"bn" follow the student's choice.
+  language: z.enum(['auto', 'en', 'bn']).optional().default('auto'),
 });
 
 /** How many drawable parts a finished visual has, for the history list. */
@@ -68,6 +70,7 @@ export function visualsRouter({ store, visualsService }) {
       materialIds,
       topic: body.topic,
       kind: body.kind,
+      language: body.language === 'auto' ? '' : body.language,
     });
 
     if (!result.ok) {

@@ -8,6 +8,42 @@
  * English suffix rules to Bangla would corrupt it.
  */
 
+/**
+ * Banglish function words: Bangla written in Latin letters ("ki vabe hoy").
+ *
+ * Kept as a named list because two features need the same vocabulary: the
+ * retrieval stopword filter (below) and question-language detection, which uses
+ * it to notice that a Latin-script question is really a Bangla question and
+ * should therefore get a Bangla answer.
+ */
+export const ROMANISED_BANGLA_WORDS = Object.freeze([
+  'ki', 'kii', 'kivabe', 'kivhabe', 'kibhabe', 'vabe', 'vhabe', 'bhabe', 'keno', 'kano', 'kemon', 'kotha', 'ktha',
+  'mane', 'bolo', 'bolun', 'dao', 'din', 'koro', 'korbo', 'kore', 'kora', 'korte', 'korle',
+  'ache', 'aache', 'achhe', 'hoy', 'hoi', 'hobe', 'holo', 'chilo', 'theke', 'jonno', 'jonyo',
+  'sathe', 'moddhe', 'upor', 'niche', 'ami', 'amra', 'apni', 'tumi', 'tara', 'nei', 'nai',
+  'bujhao', 'bujha', 'bujhte', 'bujhbo', 'likho', 'likhun', 'kothay', 'kothae', 'ktota', 'koto',
+  'somporke', 'bisoye', 'proyojon', 'dorkar', 'chai', 'lagbe', 'dekhao', 'dekhaw',
+  // Time words. "Ajk nki lockdown chilo?" is Banglish, but it contains only one
+  // listed particle, so it used to be classified as English and answered in
+  // English.
+  'aj', 'ajk', 'ajke', 'ekhon', 'akhon', 'nki', 'khobor', 'notun', 'sorkar', 'prodhanmontri',
+].map((word) => word.toLowerCase()));
+
+const ROMANISED_SET = new Set(ROMANISED_BANGLA_WORDS);
+
+/**
+ * Romanised Bangla question words. One of these is enough evidence on its own:
+ * a short question like "mechatronix ki" is only three words long, so the
+ * two-hit rule would miss it. Deliberately excludes words that are ordinary
+ * English too ("mane", "kore" in a name), which keeps the detector from
+ * hijacking an English sentence.
+ */
+export const BANGLISH_QUESTION_WORDS = new Set([
+  'ki', 'kii', 'kivabe', 'kivhabe', 'kibhabe', 'vabe', 'vhabe', 'bhabe', 'keno', 'kano',
+  'kemon', 'kotha', 'ktha', 'kothay', 'kothae', 'koto', 'ktota',
+  'bujhao', 'bujha', 'bujhte', 'bujhbo', 'bolo', 'bolun', 'nki',
+]);
+
 /** Function words carry no retrieval signal. English + common Bangla particles. */
 const STOPWORDS = new Set([
   // English
@@ -27,11 +63,7 @@ const STOPWORDS = new Set([
   // Banglish (Bangla written in Latin letters). These are question/function
   // words, not content: leaving them in a query lowers passage coverage and
   // makes an answer the material DOES support look unsupported.
-  'ki', 'kii', 'kivabe', 'kivhabe', 'kibhabe', 'keno', 'kano', 'kemon', 'kotha', 'ktha',
-  'mane', 'bolo', 'bolun', 'dao', 'din', 'koro', 'korbo', 'kore', 'kora', 'korte', 'korle',
-  'ache', 'aache', 'achhe', 'hoy', 'hoi', 'hobe', 'holo', 'chilo', 'theke', 'jonno', 'jonyo',
-  'sathe', 'moddhe', 'upor', 'niche', 'ami', 'amra', 'apni', 'tumi', 'tara', 'nei', 'nai',
-  'bujhao', 'bujha', 'bujhte', 'likho', 'likhun', 'kothay', 'kothae', 'ktota', 'koto',
+  ...ROMANISED_BANGLA_WORDS,
 ]);
 
 // \p{M} (combining marks) must be included or Brahmic scripts fall apart:
@@ -164,6 +196,45 @@ export const BANGLA_ANSWER_THRESHOLD = 0.4;
 
 export function detectLanguage(text) {
   return banglaRatio(text) >= BANGLA_ANSWER_THRESHOLD ? 'bn' : 'en';
+}
+
+/**
+ * How many romanised Bangla function words a Latin-script question needs before
+ * it counts as Banglish rather than English. Two hits AND a fifth of the words,
+ * so an English sentence that happens to contain a single loanword ("mane" in a
+ * quoted phrase) is not misread.
+ */
+export const BANGLISH_MIN_HITS = 2;
+export const BANGLISH_MIN_RATIO = 0.2;
+
+/**
+ * Language of a student's question, in three states:
+ *   'bn'       - Bangla script (the answer should be Bangla)
+ *   'banglish' - Bangla written in Latin letters: "photosynthesis ki vabe hoy"
+ *   'en'       - English
+ *
+ * Banglish is the case that used to fall through the cracks. The letters are
+ * Latin, so `detectLanguage` reported English and the tutor replied in English
+ * even when the student wrote "Bangla e bujhao".
+ */
+export function detectQuestionLanguage(text) {
+  if (detectLanguage(text) === 'bn') return 'bn';
+  const tokens = tokenize(text);
+  if (tokens.length === 0) return 'en';
+  let hits = 0;
+  let distinctive = false;
+  for (const token of tokens) {
+    if (!ROMANISED_SET.has(token)) continue;
+    hits += 1;
+    if (BANGLISH_QUESTION_WORDS.has(token)) distinctive = true;
+  }
+  if (distinctive) return 'banglish';
+  return hits >= BANGLISH_MIN_HITS && hits / tokens.length >= BANGLISH_MIN_RATIO ? 'banglish' : 'en';
+}
+
+/** Output language for a question: Bangla for Bangla and Banglish, else English. */
+export function answerLanguage(text) {
+  return detectQuestionLanguage(text) === 'en' ? 'en' : 'bn';
 }
 
 export const STOPWORD_LIST = STOPWORDS;

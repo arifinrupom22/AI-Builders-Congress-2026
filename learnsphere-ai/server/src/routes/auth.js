@@ -25,8 +25,12 @@ const email = z.string().trim().min(3).max(254);
 const password = z.string().min(PASSWORD_MIN).max(PASSWORD_MAX);
 const displayName = z.string().trim().max(60).optional();
 
+// Sign-in accepts any non-empty password: a server-provisioned bootstrap
+// credential is shorter than the normal minimum on purpose, and the account it
+// belongs to is restricted to the password screen until it is replaced.
+const loginPassword = z.string().min(1).max(PASSWORD_MAX);
 const registerBody = z.object({ email, password, displayName });
-const loginBody = z.object({ email, password });
+const loginBody = z.object({ email, password: loginPassword });
 const resetRequestBody = z.object({ email });
 const resetConfirmBody = z.object({ token: z.string().min(20).max(200), password });
 

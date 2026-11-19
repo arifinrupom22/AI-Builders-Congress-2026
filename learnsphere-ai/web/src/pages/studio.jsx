@@ -12,6 +12,7 @@
  * version the server generates for screen readers.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../lib/api.js';
 import { useApp } from '../store/AppContext.jsx';
 import { useRoute, navigate, hrefTo } from '../lib/router.jsx';
@@ -113,119 +114,286 @@ export function resolvePart(visual, partKey) {
   return null;
 }
 
-/** The four renderers. Each part is a real button, so keyboard use works. */
-export function VisualCanvas({ visual, selected, onSelect }) {
-  if (visual.kind === 'concept-map') {
-    const labelOf = (id) => visual.nodes.find((n) => n.id === id)?.label ?? id;
-    return (
-      <div className="viz viz--map">
-        <div className="viz-map__nodes">
-          {visual.nodes.map((node) => (
+/* ------------------------------------------------------------------------- */
+/* Diagrams                                                                   */
+/* ------------------------------------------------------------------------- */
+
+const MAP_W = 1000;
+const MAP_H = 700;
+
+/**
+ * Deterministic concept-map layout: the most connected concept sits in the
+ * centre, everything else on one or two rings around it. No force simulation,
+ * so the same visual always looks the same and nothing jumps while you read.
+ */
+function layoutConceptMap(nodes, edges) {
+  const degree = new Map(nodes.map((node) => [node.id, 0]));
+  for (const edge of edges) {
+    degree.set(edge.from, (degree.get(edge.from) ?? 0) + 1);
+    degree.set(edge.to, (degree.get(edge.to) ?? 0) + 1);
+  }
+  const ordered = [...nodes].sort(
+    (a, b) => (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0) || a.label.localeCompare(b.label),
+  );
+  const positions = new Map();
+  const cx = MAP_W / 2;
+  const cy = MAP_H / 2;
+  if (ordered.length === 0) return { positions, hubId: null };
+
+  positions.set(ordered[0].id, { x: cx, y: cy });
+  const rest = ordered.slice(1);
+  const rings = [
+    { items: rest.slice(0, 7), rx: MAP_W * 0.3, ry: MAP_H * 0.33, phase: 0 },
+    { items: rest.slice(7), rx: MAP_W * 0.44, ry: MAP_H * 0.45, phase: Math.PI / 7 },
+  ];
+  for (const ring of rings) {
+    ring.items.forEach((node, index) => {
+      const angle = -Math.PI / 2 + ring.phase + (index * 2 * Math.PI) / Math.max(ring.items.length, 1);
+      positions.set(node.id, { x: cx + Math.cos(angle) * ring.rx, y: cy + Math.sin(angle) * ring.ry });
+    });
+  }
+  return { positions, hubId: ordered[0].id };
+}
+
+/**
+ * Rough half-width of a node box, from its label. The old geometry used one
+ * fixed offset for every arrow, so arrows to wide nodes stopped in empty space
+ * and short arrows vanished entirely - the "broken connections" students saw.
+ */
+function nodeRadius(node) {
+  const label = String(node?.label ?? '');
+  return { rx: Math.max(62, Math.min(150, 14 + label.length * 5.2)), ry: 30 };
+}
+
+/** Point where a ray from the centre leaves the node's box. */
+function attachPoint(centre, dx, dy, { rx, ry }) {
+  const length = Math.hypot(dx, dy) || 1;
+  const ux = dx / length;
+  const uy = dy / length;
+  const t = 1 / Math.hypot(ux / rx, uy / ry);
+  const gap = 7;
+  return { x: centre.x + ux * (t + gap), y: centre.y + uy * (t + gap) };
+}
+
+/** A curved arrow that starts and ends exactly on the edge of each node box. */
+function edgeGeometry(fromNode, toNode, fromPos, toPos) {
+  const dx = toPos.x - fromPos.x;
+  const dy = toPos.y - fromPos.y;
+  const distance = Math.hypot(dx, dy);
+  if (distance < 90) return null;
+
+  const start = attachPoint(fromPos, dx, dy, nodeRadius(fromNode));
+  const end = attachPoint(toPos, -dx, -dy, nodeRadius(toNode));
+  // Bend proportional to length, so short links stay nearly straight.
+  const bend = Math.min(46, distance * 0.08);
+  const ux = dx / distance;
+  const uy = dy / distance;
+  const control = { x: (start.x + end.x) / 2 - uy * bend, y: (start.y + end.y) / 2 + ux * bend };
+  return {
+    path: `M ${start.x} ${start.y} Q ${control.x} ${control.y} ${end.x} ${end.y}`,
+    label: {
+      x: 0.25 * start.x + 0.5 * control.x + 0.25 * end.x,
+      y: 0.25 * start.y + 0.5 * control.y + 0.25 * end.y,
+    },
+  };
+}
+
+/** Concept map: a real node-and-edge picture, with every part still a button. */
+function ConceptMap({ visual, selected, onSelect }) {
+  const { positions, hubId } = useMemo(() => layoutConceptMap(visual.nodes, visual.edges), [visual.nodes, visual.edges]);
+  const labelOf = (id) => visual.nodes.find((node) => node.id === id)?.label ?? id;
+
+  const drawn = visual.edges.map((edge, index) => {
+    const from = positions.get(edge.from);
+    const to = positions.get(edge.to);
+    if (!from || !to || edge.from === edge.to) return null;
+    const fromNode = visual.nodes.find((node) => node.id === edge.from);
+    const toNode = visual.nodes.find((node) => node.id === edge.to);
+    const geometry = edgeGeometry(fromNode, toNode, from, to);
+    if (!geometry) return null;
+    // Edge verbs are shown in the relationship list under the map, not as pills
+    // floating over the drawing: at any real zoom the pills landed on top of
+    // nodes and of each other, which is exactly the clutter students reported.
+    // The arrow still shows the connection; the list names it in words.
+    const generic = !edge.label || /^appears with$/i.test(edge.label.trim());
+    return { key: `edge:${index}`, edge, geometry, generic };
+  });
+
+  return (
+    <div className="viz viz--map">
+      <div className="viz-map">
+        <svg
+          className="viz-map__edges"
+          viewBox={`0 0 ${MAP_W} ${MAP_H}`}
+          preserveAspectRatio="xMidYMid meet"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <defs>
+            <marker id="viz-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z" />
+            </marker>
+          </defs>
+          <circle className="viz-map__halo" cx={MAP_W / 2} cy={MAP_H / 2} r={150} />
+          <circle className="viz-map__halo viz-map__halo--wide" cx={MAP_W / 2} cy={MAP_H / 2} r={250} />
+          {drawn.map((item) =>
+            item ? (
+              <path
+                key={item.key}
+                className={`viz-map__edge${selected === item.key ? ' is-selected' : ''}`}
+                d={item.geometry.path}
+                markerEnd="url(#viz-arrow)"
+              />
+            ) : null,
+          )}
+        </svg>
+
+
+        {visual.nodes.map((node) => {
+          const position = positions.get(node.id);
+          if (!position) return null;
+          const isHub = hubId === node.id;
+          return (
             <button
               key={node.id}
               type="button"
-              className={`viz-node${selected === node.id ? ' is-selected' : ''}`}
+              className={`viz-map__node${isHub ? ' viz-map__node--hub' : ''}${selected === node.id ? ' is-selected' : ''}`}
+              style={{ left: `${(position.x / MAP_W) * 100}%`, top: `${(position.y / MAP_H) * 100}%` }}
               aria-pressed={selected === node.id}
               onClick={() => onSelect(node.id)}
             >
-              <span className="viz-node__label">{node.label}</span>
-              <span className="viz-node__meta">
+              <span className="viz-map__node-label">{node.label}</span>
+              <span className="viz-map__node-meta">
                 <Icon name="quote" size={11} /> {node.sourceIds.length}
               </span>
             </button>
-          ))}
-        </div>
-        <h4 className="viz__subhead" id="viz-relations">
-          Relationships stated in your material
-        </h4>
-        <ul className="viz-edges" aria-labelledby="viz-relations">
-          {visual.edges.map((edge, index) => {
-            const key = `edge:${index}`;
-            return (
-              <li key={key}>
-                <button
-                  type="button"
-                  className={`viz-edge${selected === key ? ' is-selected' : ''}`}
-                  aria-pressed={selected === key}
-                  onClick={() => onSelect(key)}
-                >
-                  <span className="viz-edge__node">{labelOf(edge.from)}</span>
-                  <Icon name="chevronRight" size={13} />
-                  <span className="viz-edge__label">{edge.label ?? 'appears with'}</span>
-                  <Icon name="chevronRight" size={13} />
-                  <span className="viz-edge__node">{labelOf(edge.to)}</span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+          );
+        })}
       </div>
-    );
-  }
 
-  if (visual.kind === 'flowchart') {
-    return (
-      <div className="viz viz--flow">
-        <h4 className="viz__subhead" id="viz-steps">
-          {visual.steps.length} steps, in the order your material gives them
-        </h4>
-        <ol className="viz-flow" aria-labelledby="viz-steps">
-          {visual.steps.map((step, index) => (
-            <li key={step.id} className="viz-flow__item">
-              <span className="viz-flow__index" aria-hidden="true">
-                {index + 1}
-              </span>
+      <h4 className="viz__subhead" id="viz-relations">
+        Relationships stated in your material
+      </h4>
+      <ul className="viz-relations" aria-labelledby="viz-relations">
+        {visual.edges.map((edge, index) => {
+          const key = `edge:${index}`;
+          return (
+            <li key={key}>
               <button
                 type="button"
-                className={`viz-part${selected === step.id ? ' is-selected' : ''}`}
-                aria-pressed={selected === step.id}
-                onClick={() => onSelect(step.id)}
+                className={`viz-relation${selected === key ? ' is-selected' : ''}`}
+                aria-pressed={selected === key}
+                onClick={() => onSelect(key)}
               >
-                <span className="viz-part__label">{step.label}</span>
-                <span className="viz-part__meta">
-                  <Icon name="quote" size={11} /> {step.sourceIds.length} source{pluralise(step.sourceIds.length, '', 's')}
-                </span>
+                <span className="viz-relation__node">{labelOf(edge.from)}</span>
+                <Icon name="chevronRight" size={12} />
+                <span className="viz-relation__label">{edge.label ?? 'appears with'}</span>
+                <Icon name="chevronRight" size={12} />
+                <span className="viz-relation__node">{labelOf(edge.to)}</span>
               </button>
             </li>
-          ))}
-        </ol>
-      </div>
-    );
-  }
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
 
-  if (visual.kind === 'timeline') {
-    return (
-      <div className="viz viz--timeline">
-        <h4 className="viz__subhead" id="viz-events">
-          {visual.events.length} dated moments, in chronological order
-        </h4>
-        <ol className="viz-timeline" aria-labelledby="viz-events">
+/** Flowchart: boxes joined by arrows, with a start and an end cap. */
+function FlowChart({ visual, selected, onSelect }) {
+  return (
+    <div className="viz viz--flow">
+      <p className="viz-caption">
+        {visual.steps.length} steps, in the order your material gives them
+      </p>
+      <ol className="flow" aria-label="Steps">
+        <li className="flow__cap" aria-hidden="true">
+          Start
+        </li>
+        {visual.steps.map((step, index) => (
+          <li key={step.id} className="flow__item">
+            <span className="flow__link" aria-hidden="true" />
+            <button
+              type="button"
+              className={`flow__box${selected === step.id ? ' is-selected' : ''}`}
+              aria-pressed={selected === step.id}
+              onClick={() => onSelect(step.id)}
+            >
+              <span className="flow__index" aria-hidden="true">
+                {index + 1}
+              </span>
+              <span className="flow__body">
+                <span className="flow__label">{step.label}</span>
+                <span className="flow__meta">
+                  <Icon name="quote" size={11} /> {step.sourceIds.length} source
+                  {pluralise(step.sourceIds.length, '', 's')}
+                </span>
+              </span>
+            </button>
+          </li>
+        ))}
+        <li className="flow__link flow__link--plain" aria-hidden="true" style={{ listStyle: 'none' }} />
+        <li className="flow__cap flow__cap--end" aria-hidden="true">
+          End
+        </li>
+      </ol>
+    </div>
+  );
+}
+
+/** Timeline: a dated axis with one card per moment. */
+function Timeline({ visual, selected, onSelect }) {
+  return (
+    <div className="viz viz--timeline">
+      <p className="viz-caption">{visual.events.length} dated moments, in chronological order</p>
+      <div className="viz-scroll" tabIndex={0} role="region" aria-label="Timeline, scrollable">
+        <ol className="tl">
           {visual.events.map((event) => (
-            <li key={event.id} className="viz-timeline__item">
-              <span className="viz-timeline__dot" aria-hidden="true" />
-              <span className="viz-timeline__when">{event.when}</span>
+            <li key={event.id} className="tl__item">
+              <span className="tl__when">{event.when}</span>
+              <span className="tl__dot" aria-hidden="true" />
               <button
                 type="button"
-                className={`viz-part${selected === event.id ? ' is-selected' : ''}`}
+                className={`tl__card${selected === event.id ? ' is-selected' : ''}`}
                 aria-pressed={selected === event.id}
                 onClick={() => onSelect(event.id)}
               >
-                <span className="viz-part__label">{event.label}</span>
-                <span className="viz-part__meta">
-                  <Icon name="quote" size={11} /> {event.sourceIds.length} source{pluralise(event.sourceIds.length, '', 's')}
+                <span className="tl__label">{event.label}</span>
+                <span className="tl__meta">
+                  <Icon name="quote" size={11} /> {event.sourceIds.length} source
+                  {pluralise(event.sourceIds.length, '', 's')}
                 </span>
               </button>
             </li>
           ))}
         </ol>
       </div>
-    );
+    </div>
+  );
+}
+
+/** The four renderers. Each part is a real button, so keyboard use works. */
+export function VisualCanvas({ visual, selected, onSelect }) {
+  if (visual.kind === 'concept-map') {
+    return <ConceptMap visual={visual} selected={selected} onSelect={onSelect} />;
+  }
+
+  if (visual.kind === 'flowchart') {
+    return <FlowChart visual={visual} selected={selected} onSelect={onSelect} />;
+  }
+
+  if (visual.kind === 'timeline') {
+    return <Timeline visual={visual} selected={selected} onSelect={onSelect} />;
   }
 
   // Comparison: a real table so column/row relationships survive screen
   // readers, with horizontal scroll instead of shrinking text on mobile.
   return (
     <div className="viz viz--table">
+      <p className="viz-caption">
+        {visual.rows.length} aspect{pluralise(visual.rows.length, '', 's')} compared across{' '}
+        {visual.columns.length} concept{pluralise(visual.columns.length, '', 's')}
+      </p>
       <div className="viz-scroll" tabIndex={0} role="region" aria-label="Comparison table, scrollable">
         <table className="viz-table">
           <thead>
@@ -329,6 +497,200 @@ function truncateForLink(text) {
   return value.length > 90 ? `${value.slice(0, 89)}…` : value;
 }
 
+/* ------------------------------------------------------------------------- */
+/* Explanation                                                                */
+/* ------------------------------------------------------------------------- */
+
+/** Compact [S#] markers, with the document and page in the tooltip. */
+function SourceTags({ ids, citations }) {
+  if (!ids?.length) return null;
+  return (
+    <span className="viz-cite">
+      {ids.map((id) => {
+        const citation = citations?.find((entry) => entry.id === id);
+        return (
+          <span
+            key={id}
+            className="viz-cite__id"
+            title={citation ? `${citation.documentName} · page ${citation.pageNumber}` : id}
+          >
+            {id}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+/**
+ * The teaching half of a visual: overview, key concepts, ordered steps, an
+ * example, what to remember and a one-line summary.
+ *
+ * Sections the material cannot support are absent, never padded with prose.
+ * `mode` says whether the wording was written by the model (live) or quoted
+ * from the source (quoted), because those are different promises.
+ */
+export function VisualExplanation({ explanation, citations }) {
+  if (!explanation) return null;
+  const { overview, keyConcepts = [], steps = [], example, remember = [], summary } = explanation;
+  if (!overview && keyConcepts.length === 0 && steps.length === 0) return null;
+
+  return (
+    <section className="viz-explain" aria-label="Explanation of this visual">
+      <header className="viz-explain__head">
+        <h3 className="viz-explain__title">Explanation</h3>
+        <span className="viz-explain__mode">
+          {explanation.mode === 'quoted' ? 'Quoted from your material' : 'Written for you, checked against your material'}
+        </span>
+      </header>
+
+      {overview ? (
+        <div className="viz-explain__block viz-explain__block--lead">
+          <h4>Topic overview</h4>
+          <p>{overview}</p>
+        </div>
+      ) : null}
+
+      {keyConcepts.length > 0 ? (
+        <div className="viz-explain__block">
+          <h4>Key concepts</h4>
+          <ul className="viz-concepts">
+            {keyConcepts.map((concept) => (
+              <li key={concept.term} className="viz-concept">
+                <span className="viz-concept__term">
+                  {concept.term}
+                  <SourceTags ids={concept.sourceIds} citations={citations} />
+                </span>
+                <span className="viz-concept__meaning">{concept.meaning}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {steps.length > 0 ? (
+        <div className="viz-explain__block">
+          <h4>Step by step</h4>
+          <ol className="viz-steps">
+            {steps.map((step, index) => (
+              <li key={`${step.title}-${index}`} className="viz-step">
+                <span className="viz-step__index" aria-hidden="true">
+                  {index + 1}
+                </span>
+                <div className="viz-step__body">
+                  <span className="viz-step__title">
+                    {step.title}
+                    <SourceTags ids={step.sourceIds} citations={citations} />
+                  </span>
+                  {step.text && step.text !== step.title ? <span className="viz-step__text">{step.text}</span> : null}
+                </div>
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
+
+      {example ? (
+        <div className="viz-explain__block viz-explain__block--example">
+          <h4>
+            Practical example
+            <SourceTags ids={example.sourceIds} citations={citations} />
+          </h4>
+          <p>{example.text}</p>
+        </div>
+      ) : null}
+
+      {remember.length > 0 ? (
+        <div className="viz-explain__block">
+          <h4>Remember this</h4>
+          <ul className="viz-remember">
+            {remember.map((item, index) => (
+              <li key={`${item.text.slice(0, 24)}-${index}`}>
+                {item.text}
+                <SourceTags ids={item.sourceIds} citations={citations} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {summary ? (
+        <div className="viz-explain__block viz-explain__block--summary">
+          <h4>Short summary</h4>
+          <p>{summary}</p>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/**
+ * The diagram frame: fits the available width, and can be expanded for a
+ * complex map. Zoom scales the whole drawing (nodes and arrows together), so
+ * connections never drift away from the boxes they join.
+ */
+function DiagramFrame({ visual, selected, onSelect, kindLabel }) {
+  const [expanded, setExpanded] = useState(false);
+  const [zoom, setZoom] = useState(1);
+
+  useEffect(() => {
+    if (!expanded) return undefined;
+    const onKey = (event) => {
+      if (event.key === 'Escape') setExpanded(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [expanded]);
+
+  const step = (delta) => setZoom((value) => Math.min(1.8, Math.max(1, Number((value + delta).toFixed(2)))));
+
+  const frame = (
+    <div className={`viz-frame${expanded ? ' viz-frame--expanded' : ''}`}>
+      <div className="viz-frame__bar">
+        <span className="viz-frame__name">
+          <Icon name={KIND_ICONS[visual.kind] ?? 'eye'} size={14} /> {kindLabel}
+        </span>
+        <div className="viz-frame__tools">
+          <button
+            type="button"
+            className="viz-frame__btn"
+            onClick={() => step(-0.15)}
+            disabled={zoom <= 1}
+            aria-label="Zoom out"
+          >
+            −
+          </button>
+          <span className="viz-frame__zoom" aria-live="polite">
+            {Math.round(zoom * 100)}%
+          </span>
+          <button
+            type="button"
+            className="viz-frame__btn"
+            onClick={() => step(0.15)}
+            disabled={zoom >= 1.8}
+            aria-label="Zoom in"
+          >
+            +
+          </button>
+          <button type="button" className="viz-frame__btn viz-frame__btn--wide" onClick={() => setExpanded((v) => !v)}>
+            <Icon name={expanded ? 'close' : 'external'} size={13} /> {expanded ? 'Close' : 'Expand'}
+          </button>
+        </div>
+      </div>
+      <div className="viz-frame__canvas">
+        <div className="viz-frame__zoomable" style={{ '--viz-zoom': zoom }}>
+          <VisualCanvas visual={visual} selected={selected} onSelect={onSelect} />
+        </div>
+      </div>
+    </div>
+  );
+
+  // Rendered into <body> when expanded: a fixed element inside the page's
+  // transformed/backdrop-filtered card is positioned against that card, which
+  // left the sidebar showing through the overlay.
+  return expanded ? createPortal(frame, document.body) : frame;
+}
+
 export default function StudioPage() {
   const { materials, materialsState, notify } = useApp();
   const route = useRoute();
@@ -341,6 +703,7 @@ export default function StudioPage() {
   });
   const [topic, setTopic] = useState('');
   const [kind, setKind] = useState('auto');
+  const [language, setLanguage] = useState('auto');
   const [options, setOptions] = useState(FALLBACK_KINDS);
   const [state, setState] = useState('idle'); // idle | loading | ready
   const [record, setRecord] = useState(null);
@@ -398,6 +761,7 @@ export default function StudioPage() {
         topic: topic.trim(),
         materialIds: selected.length ? selected : null,
         kind,
+        language,
       });
       setRecord(created);
       setState('ready');
@@ -410,7 +774,7 @@ export default function StudioPage() {
         setError(err);
       }
     }
-  }, [topic, selected, kind, loadSaved]);
+  }, [topic, selected, kind, language, loadSaved]);
 
   const openSaved = useCallback(async (id) => {
     setState('loading');
@@ -454,6 +818,21 @@ export default function StudioPage() {
     } catch {
       notify('Your browser blocked clipboard access.', 'error');
     }
+  }, [record, notify]);
+
+  const downloadText = useCallback(() => {
+    if (!record?.visual) return;
+    const body = `${record.visual.title}\n\n${record.visual.textVersion ?? ''}\n`;
+    const blob = new Blob([body], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${String(record.visual.title ?? 'visual').replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '').slice(0, 60) || 'visual'}.md`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    notify('Downloaded as a markdown study page', 'success');
   }, [record, notify]);
 
   const part = useMemo(() => (record ? resolvePart(record.visual, partKey) : null), [record, partKey]);
@@ -510,6 +889,15 @@ export default function StudioPage() {
                 </select>
               )}
             </Field>
+            <Field label="Page language" hint="Follows your topic and material when set to Auto.">
+              {({ id }) => (
+                <select id={id} className="ls-input" value={language} onChange={(e) => setLanguage(e.target.value)}>
+                  <option value="auto">Auto</option>
+                  <option value="en">English</option>
+                  <option value="bn">{'\u09ac\u09be\u0982\u09b2\u09be'}</option>
+                </select>
+              )}
+            </Field>
           </div>
 
           <div className="row-actions">
@@ -524,7 +912,9 @@ export default function StudioPage() {
           </div>
         </div>
 
-        {state === 'loading' ? <LoadingPanel label="Reading your material and checking its structure" rows={4} /> : null}
+        {state === 'loading' ? (
+          <LoadingPanel label="Reading your material, checking its structure, then writing the explanation and the diagram" rows={4} />
+        ) : null}
 
         {error ? <ErrorPanel error={error} title="Could not build the visual" onRetry={() => generate()} /> : null}
 
@@ -593,9 +983,16 @@ export default function StudioPage() {
               </Alert>
             ))}
 
+            <VisualExplanation explanation={record.visual.explanation} citations={record.citations} />
+
             <div className="viz-layout">
               <div className="viz-layout__canvas">
-                <VisualCanvas visual={record.visual} selected={partKey} onSelect={(key) => setPartKey(key)} />
+                <DiagramFrame
+                  visual={record.visual}
+                  selected={partKey}
+                  onSelect={(key) => setPartKey(key)}
+                  kindLabel={kindLabel}
+                />
               </div>
               <aside className="viz-layout__panel">
                 <DetailPanel part={part} citations={record.citations} kindLabel={kindLabel} onClose={() => setPartKey(null)} />
@@ -613,6 +1010,9 @@ export default function StudioPage() {
               <div className="row-actions">
                 <Button variant="secondary" size="sm" icon={copied ? 'check' : 'quote'} onClick={copyText}>
                   {copied ? 'Copied' : 'Copy text version'}
+                </Button>
+                <Button variant="secondary" size="sm" icon="download" onClick={downloadText}>
+                  Download page
                 </Button>
               </div>
             </details>

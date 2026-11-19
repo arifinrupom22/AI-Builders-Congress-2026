@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react';
 import { useApp } from '../store/AppContext.jsx';
 import { Icon } from './Icons.jsx';
+import { BrandLogo } from './BrandLogo.jsx';
 import { Badge, Button } from './ui.jsx';
 import { PreferencesControls } from './PublicChrome.jsx';
 
@@ -141,10 +142,9 @@ export function ToastStack({ toasts, onDismiss }) {
 }
 
 export function AppShell({ route, children }) {
-  const { ai, materials, learnerId, auth, toasts, dismissToast, health, refreshMaterials, bootState, config, t, signOut, notify } =
+  const { ai, materials, learnerId, auth, toasts, dismissToast, health, refreshMaterials, bootState, t, signOut, notify } =
     useApp();
   const accountName = auth?.user ? auth.user.displayName || auth.user.email : null;
-  const demoMode = config?.auth?.mode !== 'required';
   const active = findNavEntry(route.path);
   const [navOpen, setNavOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
@@ -174,18 +174,9 @@ export function AppShell({ route, children }) {
         {t('shell.skip')}
       </a>
 
-      {demoMode ? (
-        <div className="demo-banner" role="status">
-          <Icon name="info" size={15} />
-          <span>{t('shell.demoBanner')}</span>
-        </div>
-      ) : null}
-
       <aside className="app__sidebar" aria-label="Primary">
         <div className="app__brand">
-          <span className="app__brand-mark" aria-hidden="true">
-            <Icon name="compass" size={22} />
-          </span>
+          <BrandLogo size={38} />
           <span className="app__brand-text">
             LearnSphere <strong>AI</strong>
             <small>{t('shell.brandSub')}</small>

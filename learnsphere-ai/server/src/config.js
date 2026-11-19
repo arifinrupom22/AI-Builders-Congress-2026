@@ -71,7 +71,9 @@ export const PROVIDER_PRESETS = {
   gemini: {
     label: 'Google AI Studio (Gemini)',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    defaultModel: 'gemini-2.5-flash',
+    // gemini-2.5-flash now returns 404 for newly created keys; the preview
+    // alias is the one that answers with current AI Studio keys.
+    defaultModel: 'gemini-3-flash-preview',
     trainsOnData: true,
     keyUrl: 'https://aistudio.google.com/apikey',
     privacy:
@@ -135,6 +137,8 @@ function resolveAi() {
   if (providerId !== 'none' && !baseUrl) missing.push('LEARNSPHERE_AI_BASE_URL');
   if (providerId === 'cloudflare' && !accountId && !str('LEARNSPHERE_AI_BASE_URL')) missing.push('CF_ACCOUNT_ID');
 
+  const timeoutMs = num('AI_TIMEOUT_MS', 45000, { min: 3000, max: 180000 });
+
   return {
     providerId,
     label: preset?.label ?? 'Offline demo mode',
@@ -145,8 +149,77 @@ function resolveAi() {
     model,
     configured: providerId !== 'none' && missing.length === 0,
     missing,
-    timeoutMs: num('AI_TIMEOUT_MS', 45000, { min: 3000, max: 180000 }),
+    timeoutMs,
+    // Extra providers tried in order when the primary fails. A free tier that
+    // rate-limits (or a key that runs out mid-demo) must not take the app down.
+    fallbacks: resolveFallbackProviders(timeoutMs, rejected),
   };
+}
+
+/**
+ * Additional providers, configured with numbered slots:
+ *
+ *   LEARNSPHERE_AI_FALLBACK1_PROVIDER=gemini
+ *   LEARNSPHERE_AI_FALLBACK1_API_KEY=...
+ *   LEARNSPHERE_AI_FALLBACK1_MODEL=gemini-2.5-flash    (optional)
+ *   LEARNSPHERE_AI_FALLBACK1_BASE_URL=...              (optional)
+ *
+ * Up to three slots, so two spare Gemini keys can back up a Groq primary. A
+ * slot that is only half filled is skipped and named in the config warnings
+ * rather than silently pretending to be available.
+ */
+const FALLBACK_SLOTS = [1, 2, 3];
+
+function resolveFallbackProviders(timeoutMs, rejected) {
+  const providers = [];
+  const seen = new Set();
+  for (const slot of FALLBACK_SLOTS) {
+    const prefix = `LEARNSPHERE_AI_FALLBACK${slot}`;
+    const requested = (str(`${prefix}_PROVIDER`) || '').toLowerCase();
+    if (!requested) continue;
+    if (!PROVIDER_IDS.includes(requested) || requested === 'none') {
+      rejected.push(`${prefix}_PROVIDER=${requested} (unknown provider) - slot skipped`);
+      continue;
+    }
+    const preset = PROVIDER_PRESETS[requested];
+    const accountId = str('CF_ACCOUNT_ID');
+    let baseUrl = str(`${prefix}_BASE_URL`) || str('LEARNSPHERE_AI_BASE_URL');
+    if (!baseUrl && preset?.baseUrlTemplate && accountId) {
+      baseUrl = preset.baseUrlTemplate.replace('{accountId}', accountId);
+    }
+    if (!baseUrl) baseUrl = preset?.baseUrl ?? '';
+    baseUrl = baseUrl.replace(/\/+$/, '');
+    const model = str(`${prefix}_MODEL`) || preset?.defaultModel || '';
+    const apiKey = str(`${prefix}_API_KEY`) || str('LEARNSPHERE_AI_API_KEY');
+
+    const missing = [];
+    if (!apiKey) missing.push(`${prefix}_API_KEY`);
+    if (!baseUrl) missing.push(`${prefix}_BASE_URL`);
+    if (missing.length > 0) {
+      rejected.push(`${prefix}_PROVIDER=${requested} (incomplete: ${missing.join(', ')}) - slot skipped`);
+      continue;
+    }
+    // One key per provider id: two Gemini slots holding the same key would just
+    // repeat the same rate limit, so the duplicate is dropped.
+    const key = `${requested}:${apiKey}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    providers.push({
+      slot,
+      providerId: requested,
+      label: preset.label,
+      privacy: preset.privacy,
+      providerTrainsOnData: preset.trainsOnData,
+      baseUrl,
+      apiKey,
+      model,
+      configured: true,
+      missing: [],
+      timeoutMs,
+    });
+  }
+  return providers;
 }
 
 const ai = resolveAi();
@@ -239,6 +312,12 @@ export const config = Object.freeze({
 
   auth: {
     mode: authMode,
+    /**
+     * 'allowlist' (default) restricts account creation to the team addresses in
+     * auth/team.js. 'open' is for a deployment that should accept any sign-up;
+     * it is never the default and the UI is told about it explicitly.
+     */
+    registrationPolicy: (str('AUTH_REGISTRATION_POLICY') || 'allowlist').toLowerCase() === 'open' ? 'open' : 'allowlist',
     sessionTtlDays: num('SESSION_TTL_DAYS', 14, { min: 1, max: 90 }),
     cookieName: 'ls_session',
     resetTokenTtlMinutes: num('AUTH_RESET_TTL_MINUTES', 30, { min: 5, max: 120 }),
@@ -269,6 +348,24 @@ export const config = Object.freeze({
         privacy: this.ai.privacy,
         providerTrainsOnData: this.ai.providerTrainsOnData,
         missingEnvVars: this.ai.missing,
+        // Which providers can answer, primary first. Ids, labels and models
+        // only - keys never leave the server.
+        providers: [
+          {
+            id: this.ai.providerId,
+            label: this.ai.label,
+            model: this.ai.model,
+            role: 'primary',
+            configured: this.ai.configured,
+          },
+          ...this.ai.fallbacks.map((fallback) => ({
+            id: fallback.providerId,
+            label: fallback.label,
+            model: fallback.model,
+            role: 'fallback',
+            configured: true,
+          })),
+        ],
       },
       retrieval: { topK: this.retrieval.topK, minScore: this.retrieval.minScore },
       auth: {
@@ -282,6 +379,10 @@ export const config = Object.freeze({
         // decide between "sign in" and the profile switcher, and must never
         // present a profile id as an account.
         accounts: this.auth.mode !== 'local',
+        // The allowlist itself is never exposed; only the fact that sign-up is
+        // invitation-only, so the form can say so before a request is made.
+        registrationPolicy: this.auth.registrationPolicy,
+        invitationOnly: this.auth.registrationPolicy === 'allowlist',
         sessionTtlDays: this.auth.sessionTtlDays,
       },
       limits: {

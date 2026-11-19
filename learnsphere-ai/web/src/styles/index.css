@@ -863,6 +863,27 @@ select.ls-input {
   padding: 0 var(--s2);
 }
 
+/* The supplied logo artwork in a white app-icon tile. `logo-mark.png` is the same
+   file cropped to the mark with even margins, so the wordmark baked into the
+   original is never repeated beside the text label. */
+.brand-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  overflow: hidden;
+  background: #ffffff;
+  box-shadow: 0 0 0 1px rgba(15, 30, 61, 0.08) inset;
+}
+
+/* The crop carries its own even margins, so the image simply fills the tile. */
+.brand-tile__img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
 .app__brand-mark {
   display: inline-flex;
   align-items: center;
@@ -1172,11 +1193,13 @@ select.ls-input {
   margin-bottom: 0;
 }
 
-.hero {
+.dash-hero {
   display: grid;
   grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
   gap: var(--s6);
-  align-items: start;
+  /* Stretch, so the "Next step" panel ends with the text beside it instead of
+     stopping halfway and leaving a hollow block on the right. */
+  align-items: stretch;
   padding: var(--s7);
   border: 1px solid var(--c-border);
   border-radius: var(--r-lg);
@@ -1184,7 +1207,7 @@ select.ls-input {
   box-shadow: var(--shadow-sm);
 }
 
-.hero__eyebrow {
+.dash-hero__eyebrow {
   display: inline-flex;
   align-items: center;
   gap: var(--s2);
@@ -1201,21 +1224,24 @@ select.ls-input {
   text-transform: uppercase;
 }
 
-.hero__title {
-  font-size: clamp(var(--text-xl), 3.4vw, var(--text-3xl));
+.dash-hero__title {
+  /* One step below the page title's scale: the hero is a card inside the app,
+     not a landing-page banner, and 3.8rem wrapped mid-sentence. */
+  font-size: clamp(var(--text-xl), 2.6vw, var(--text-2xl));
   font-weight: 650;
-  letter-spacing: -0.025em;
+  line-height: 1.18;
+  letter-spacing: -0.02em;
   margin-bottom: var(--s3);
 }
 
-.hero__subtitle {
+.dash-hero__subtitle {
   max-width: 62ch;
   color: var(--c-ink-2);
   font-size: var(--text-md);
   line-height: var(--line-lead);
 }
 
-.hero__meta {
+.dash-hero__meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1223,7 +1249,7 @@ select.ls-input {
   margin-top: var(--s5);
 }
 
-.hero__meta-item {
+.dash-hero__meta-item {
   display: inline-flex;
   align-items: center;
   gap: var(--s2);
@@ -1233,11 +1259,11 @@ select.ls-input {
   color: var(--c-ink-2);
 }
 
-.hero__meta-item .icon {
+.dash-hero__meta-item .icon {
   color: var(--c-ink-3);
 }
 
-.hero__privacy {
+.dash-hero__privacy {
   margin-top: var(--s3);
   padding-top: var(--s3);
   border-top: 1px dashed var(--c-border);
@@ -1256,8 +1282,11 @@ select.ls-input {
   padding: var(--s5);
   border: 1px solid var(--c-accent-line);
   border-radius: var(--r-md);
-  background: var(--c-surface);
+  background: var(--c-surface-2);
   box-shadow: var(--shadow-sm);
+  /* Matches the height of the text column it sits beside. */
+  height: 100%;
+  justify-content: flex-start;
 }
 
 .next-step--pending {
@@ -1952,6 +1981,25 @@ select.ls-input {
   display: flex;
   gap: var(--s2);
   flex: none;
+}
+
+/* On a narrow screen the four row buttons take most of the line, squeezing the
+   document name into a three-line column. Give them their own line instead. */
+@media (max-width: 760px) {
+  .material-row {
+    flex-wrap: wrap;
+  }
+
+  .material-row__main {
+    flex: 1 1 0;
+  }
+
+  .material-row__actions {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    padding-left: calc(38px + var(--s4));
+  }
 }
 
 .kv-grid {
@@ -4296,13 +4344,13 @@ select.ls-input {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .hero {
+  .dash-hero {
     padding: var(--s6);
   }
 }
 
 @media (max-width: 1024px) {
-  .hero {
+  .dash-hero {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -4425,12 +4473,12 @@ select.ls-input {
     padding: var(--s3);
   }
 
-  .hero {
+  .dash-hero {
     padding: var(--s5);
   }
 
   .next-step__cta,
-  .hero .ls-btn {
+  .dash-hero .ls-btn {
     width: 100%;
   }
 
@@ -5835,4 +5883,823 @@ select.ls-input {
     gap: var(--s4, 16px);
     padding-left: 26px;
   }
+}
+
+/* ---------------------------------------------------------------------------
+ * Visual studio diagrams
+ *
+ * The studio draws four kinds of picture. Each one is built from ordinary
+ * elements (buttons, an SVG layer, a table) rather than a canvas, so it stays
+ * keyboard-navigable, readable by a screen reader and printable.
+ * ------------------------------------------------------------------------ */
+
+.viz-caption {
+  margin: 0 0 var(--s4);
+  font-size: var(--text-sm);
+  color: var(--c-ink-3);
+}
+
+/* Concept map: dotted field, accent halo, curved labelled arrows. */
+.viz-map {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 10 / 7;
+  min-height: 420px;
+  max-height: 640px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  background:
+    radial-gradient(circle at 50% 46%, var(--c-accent-soft), transparent 58%),
+    radial-gradient(var(--c-border) 1px, transparent 1px) 0 0 / 24px 24px,
+    var(--c-surface);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.viz-map__edges {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  color: var(--c-accent);
+}
+
+.viz-map__edge {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  opacity: 0.5;
+  transition: opacity var(--t-fast), stroke-width var(--t-fast);
+}
+
+.viz-map__edge.is-selected {
+  opacity: 1;
+  stroke-width: 3.4;
+}
+
+#viz-arrow path {
+  fill: var(--c-accent);
+}
+
+.viz-map__halo {
+  fill: none;
+  stroke: var(--c-accent-line);
+  stroke-dasharray: 3 9;
+  opacity: 0.45;
+}
+
+.viz-map__halo--wide {
+  opacity: 0.22;
+}
+
+.viz-map__node {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: center;
+  min-width: 96px;
+  max-width: 190px;
+  padding: var(--s3) var(--s4);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-pill);
+  box-shadow: var(--shadow-sm);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+  z-index: 2;
+  transition: transform var(--t-fast), border-color var(--t-fast), box-shadow var(--t-fast),
+    background var(--t-fast);
+}
+
+.viz-map__node:hover {
+  transform: translate(-50%, -50%) scale(1.05);
+  border-color: var(--c-accent);
+  box-shadow: var(--shadow-md);
+  z-index: 3;
+}
+
+.viz-map__node.is-selected {
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+  box-shadow: 0 0 0 2px var(--c-accent-line), var(--shadow-md);
+  z-index: 4;
+}
+
+.viz-map__node-label {
+  font-size: var(--text-sm);
+  font-weight: 650;
+  color: var(--c-ink);
+  line-height: 1.25;
+}
+
+.viz-map__node-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--text-xs);
+  color: var(--c-ink-3);
+}
+
+.viz-map__edge-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  max-width: 168px;
+  padding: 3px 10px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-pill);
+  box-shadow: var(--shadow-sm);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--c-ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.viz-map__edge-label:hover {
+  border-color: var(--c-accent-line);
+  color: var(--c-ink);
+}
+
+.viz-map__edge-label.is-selected {
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+  color: var(--c-ink);
+  z-index: 3;
+}
+
+.viz-relations {
+  list-style: none;
+  margin: var(--s3) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s2);
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+}
+
+.viz-relation {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--c-ink-2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.viz-relation:hover {
+  border-color: var(--c-accent-line);
+  background: var(--c-surface);
+}
+
+.viz-relation.is-selected {
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+  color: var(--c-ink);
+}
+
+.viz-relation__node {
+  font-weight: 650;
+  color: var(--c-ink);
+}
+
+.viz-relation__label {
+  color: var(--c-ink-3);
+  font-style: italic;
+}
+
+/* Flowchart: connected boxes with real arrow heads. */
+.flow {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.flow__cap {
+  list-style: none;
+  padding: 4px 16px;
+  border: 1px dashed var(--c-border-strong);
+  border-radius: var(--r-pill);
+  background: var(--c-surface-2);
+  font-size: var(--text-xs);
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--c-ink-3);
+}
+
+.flow__item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(100%, 580px);
+}
+
+.flow__link {
+  position: relative;
+  width: 2px;
+  height: 22px;
+  background: var(--c-border-strong);
+  list-style: none;
+}
+
+.flow__link::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 7px solid var(--c-accent);
+}
+
+.flow__link--plain::after {
+  content: none;
+}
+
+.flow__box {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  width: 100%;
+  padding: var(--s3) var(--s4);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-left: 3px solid var(--c-accent-line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-sm);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform var(--t-fast), border-color var(--t-fast), box-shadow var(--t-fast);
+}
+
+.flow__box:hover {
+  transform: translateY(-1px);
+  border-color: var(--c-accent-line);
+  border-left-color: var(--c-accent);
+  box-shadow: var(--shadow-md);
+}
+
+.flow__box.is-selected {
+  border-color: var(--c-accent);
+  border-left-color: var(--c-accent);
+  background: var(--c-accent-soft);
+  box-shadow: 0 0 0 1px var(--c-accent-line);
+}
+
+.flow__index {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.flow__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.flow__label {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--c-ink);
+}
+
+.flow__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-xs);
+  color: var(--c-ink-3);
+}
+
+/* Timeline: a dated axis with one card per moment. */
+.tl {
+  list-style: none;
+  margin: 0;
+  padding: var(--s2) 0 var(--s3);
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(168px, 1fr);
+  position: relative;
+  min-width: 100%;
+}
+
+.tl::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 52px;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--c-accent-line) 5%,
+    var(--c-accent-line) 95%,
+    transparent
+  );
+}
+
+.tl__item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s2);
+  padding: 0 var(--s3);
+  position: relative;
+}
+
+.tl__when {
+  display: flex;
+  align-items: center;
+  height: 34px;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--c-accent);
+}
+
+.tl__dot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--c-surface);
+  border: 3px solid var(--c-accent);
+  box-shadow: 0 0 0 4px var(--c-surface);
+  z-index: 1;
+}
+
+.tl__card {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--s3);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-sm);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+
+.tl__card:hover {
+  border-color: var(--c-accent-line);
+  box-shadow: var(--shadow-md);
+}
+
+.tl__card.is-selected {
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+}
+
+.tl__label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--c-ink);
+  line-height: 1.35;
+}
+
+.tl__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-xs);
+  color: var(--c-ink-3);
+}
+
+.viz--timeline .viz-scroll {
+  overflow-x: auto;
+  padding-bottom: var(--s2);
+}
+
+@media (max-width: 760px) {
+  .viz-map {
+    aspect-ratio: auto;
+    min-height: 520px;
+  }
+
+  .viz-map__node {
+    max-width: 124px;
+    padding: 6px 10px;
+  }
+
+  .viz-map__node-label {
+    font-size: var(--text-xs);
+  }
+
+  .tl {
+    grid-auto-columns: minmax(150px, 1fr);
+  }
+}
+
+/* Hub concept: the idea the material connects to everything else. */
+.viz-map__node--hub {
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+  min-width: 130px;
+  padding: var(--s3) var(--s5);
+}
+
+.viz-map__node--hub .viz-map__node-label {
+  font-size: var(--text-md);
+}
+
+@media (max-width: 760px) {
+  .viz-map__node--hub {
+    min-width: 108px;
+    padding: 7px 12px;
+  }
+
+  .viz-map__node--hub .viz-map__node-label {
+    font-size: var(--text-sm);
+  }
+}
+
+/* ------------------------------------------------------------------------- */
+/* Visual Studio: teaching explanation + diagram frame                       */
+/* ------------------------------------------------------------------------- */
+
+.viz-explain {
+  display: grid;
+  gap: var(--s5);
+  padding: var(--s5) var(--s5) var(--s6, var(--s5));
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  background: var(--c-surface);
+}
+
+.viz-explain__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  padding-bottom: var(--s3);
+  border-bottom: 1px solid var(--c-border);
+}
+
+.viz-explain__title {
+  margin: 0;
+  font-size: var(--text-lg);
+  letter-spacing: -0.01em;
+}
+
+.viz-explain__mode {
+  font-size: var(--text-xs);
+  color: var(--c-ink-3);
+}
+
+.viz-explain__block h4 {
+  margin: 0 0 var(--s2);
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-ink-3);
+}
+
+.viz-explain__block p {
+  margin: 0;
+  max-width: 78ch;
+  line-height: 1.7;
+  color: var(--c-ink-1);
+}
+
+.viz-explain__block--lead p {
+  font-size: var(--text-md);
+  line-height: 1.65;
+}
+
+.viz-explain__block--example {
+  border-left: 2px solid var(--c-accent);
+  padding: var(--s2) 0 var(--s2) var(--s4);
+  background: var(--c-accent-soft);
+  border-radius: 0 var(--r-md, 8px) var(--r-md, 8px) 0;
+}
+
+.viz-explain__block--summary p {
+  color: var(--c-ink-2, var(--c-ink-3));
+  font-style: italic;
+}
+
+.viz-concepts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--s3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.viz-concept {
+  display: grid;
+  gap: 6px;
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md, 8px);
+  background: var(--c-surface-2, transparent);
+}
+
+.viz-concept__term {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-weight: 650;
+  font-size: var(--text-sm);
+  color: var(--c-ink-1);
+}
+
+.viz-concept__meaning {
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--c-ink-3);
+}
+
+.viz-steps {
+  display: grid;
+  gap: var(--s3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: viz-step;
+}
+
+.viz-step {
+  display: grid;
+  grid-template-columns: 26px 1fr;
+  gap: var(--s3);
+  align-items: start;
+}
+
+.viz-step__index {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.viz-step__body {
+  display: grid;
+  gap: 4px;
+}
+
+.viz-step__title {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-weight: 650;
+  font-size: var(--text-sm);
+  color: var(--c-ink-1);
+}
+
+.viz-step__text {
+  font-size: var(--text-sm);
+  line-height: 1.65;
+  color: var(--c-ink-3);
+}
+
+.viz-remember {
+  display: grid;
+  gap: var(--s2);
+  margin: 0;
+  padding-left: var(--s4);
+  color: var(--c-ink-2, var(--c-ink-3));
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+.viz-cite {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 2px;
+  vertical-align: middle;
+}
+
+.viz-cite__id {
+  padding: 1px 5px;
+  border-radius: 999px;
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  color: var(--c-ink-3);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+}
+
+/* The diagram frame: fits the column, and can be expanded or zoomed. */
+.viz-frame {
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  background: var(--c-surface);
+  overflow: hidden;
+}
+
+.viz-frame__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  padding: var(--s2) var(--s3);
+  border-bottom: 1px solid var(--c-border);
+}
+
+.viz-frame__name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-ink-3);
+}
+
+.viz-frame__tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.viz-frame__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm, 6px);
+  background: var(--c-surface);
+  color: var(--c-ink-2, var(--c-ink-1));
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.viz-frame__btn:hover:not(:disabled) {
+  border-color: var(--c-accent);
+  color: var(--c-accent);
+}
+
+.viz-frame__btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.viz-frame__btn--wide {
+  padding: 0 10px;
+}
+
+.viz-frame__zoom {
+  min-width: 42px;
+  text-align: center;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--c-ink-3);
+}
+
+.viz-frame__canvas {
+  overflow: auto;
+  max-width: 100%;
+}
+
+.viz-frame__zoomable {
+  zoom: var(--viz-zoom, 1);
+}
+
+.viz-frame--expanded {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  border: none;
+  border-radius: 0;
+  background: var(--c-canvas);
+}
+
+.viz-frame--expanded .viz-frame__bar {
+  padding: var(--s3) var(--s5);
+}
+
+.viz-frame--expanded .viz-frame__canvas {
+  flex: 1;
+  padding: var(--s4);
+}
+
+.viz-frame--expanded .viz-map {
+  aspect-ratio: auto;
+  min-height: 0;
+  height: calc(100vh - 170px);
+  max-height: none;
+}
+
+@media (max-width: 760px) {
+  .viz-explain {
+    padding: var(--s4);
+    gap: var(--s4);
+  }
+
+  .viz-concepts {
+    grid-template-columns: 1fr;
+  }
+
+  .viz-frame--expanded .viz-map {
+    height: calc(100vh - 210px);
+  }
+
+  .viz-frame__btn--wide {
+    padding: 0 8px;
+  }
+}
+
+/* The expanded diagram must sit above the app chrome, not behind it. */
+.viz-frame--expanded {
+  z-index: 200;
+}
+
+.viz-frame--expanded .viz-frame__bar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--c-canvas);
+  border-bottom: 1px solid var(--c-border);
+}
+
+/* Expanded diagram: cover the whole app, sidebar included. */
+.viz-frame--expanded {
+  z-index: 5000;
+  inset: 0;
+  background: var(--c-canvas);
+}
+
+/* The map's boxes are positioned in percentages of the container, while the
+   arrows are drawn in a 1000x700 viewBox. The two only line up when the
+   container keeps that aspect ratio - so it must never be "auto". */
+.viz-map {
+  aspect-ratio: 10 / 7;
+}
+
+.viz-frame--expanded .viz-map {
+  aspect-ratio: 10 / 7;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  width: min(100%, calc((100vh - 190px) * 10 / 7));
+  margin: 0 auto;
+}
+
+@media (max-width: 760px) {
+  .viz-map {
+    aspect-ratio: 10 / 7;
+    min-height: 0;
+    min-width: 620px;
+  }
+}
+
+/* Nothing from the app chrome may sit on top of an expanded diagram. */
+.viz-frame--expanded {
+  z-index: 9999;
 }

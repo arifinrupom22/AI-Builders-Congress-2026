@@ -2,8 +2,10 @@
  * AI Teacher — ask questions about your own material.
  *
  * The UI is built around honesty rather than fluency:
- *   - every answer shows whether a real model or the local extractive teacher
- *     produced it (`generationMode`), and the server's own provenance sentence,
+ *   - every answer shows whether it is grounded in the uploaded material, a
+ *     general-knowledge answer (the material does not cover the question), or
+ *     the offline local teacher (`generationMode`), plus the server's own
+ *     provenance sentence,
  *   - a refusal (`kind: insufficient_material` / `no_materials`) is presented as
  *     a valid answer with the next action spelled out,
  *   - citations are chips that open the exact retrieved passage.
@@ -19,6 +21,8 @@ import { formatRelative, pluralise, truncate } from '../lib/format.js';
 
 const KIND_LABELS = {
   grounded: { tone: 'success', label: 'Grounded in your material' },
+  general: { tone: 'neutral', label: 'General knowledge' },
+  chat: { tone: 'neutral', label: 'Conversation' },
   insufficient_material: { tone: 'warning', label: 'Your material does not cover this' },
   no_materials: { tone: 'warning', label: 'Library empty' },
 };
@@ -81,8 +85,15 @@ function MessageBubble({ message, onCitation }) {
       <div className="msg__body">
         <div className="msg__meta">
           {kind ? <Badge tone={kind.tone}>{kind.label}</Badge> : null}
-          <Badge tone={message.generationMode === 'live' ? 'success' : 'neutral'} icon={message.generationMode === 'live' ? 'sparkles' : 'shield'}>
-            {message.generationMode === 'live' ? 'Model answer' : 'Local extractive answer'}
+          <Badge
+            tone={message.generationMode === 'live' ? 'success' : 'neutral'}
+            icon={message.generationMode === 'instant' ? 'check' : message.generationMode === 'live' ? 'sparkles' : 'shield'}
+          >
+            {message.generationMode === 'instant'
+              ? 'Instant reply'
+              : message.generationMode === 'live'
+                ? 'Model answer'
+                : 'Local extractive answer'}
           </Badge>
           {message.mode ? <span className="msg__mode">{message.mode.replace(/_/g, ' ')}</span> : null}
           <span className="msg__time">{formatRelative(message.createdAt)}</span>
@@ -374,7 +385,7 @@ export default function ChatPage({ route }) {
       <section className="chat__main">
         <Card
           title="Ask the AI Teacher"
-          subtitle="Answers are restricted to what your uploaded material actually says."
+          subtitle="Answers start from your material. When it does not cover a question, the teacher says so and answers from general knowledge."
           className="chat__card"
         >
           <div className="chat__stream" ref={streamRef} aria-live="polite">

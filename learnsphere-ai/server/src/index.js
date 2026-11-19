@@ -21,10 +21,16 @@ import { createCoachService } from './coach/service.js';
 import { createPlannerService } from './planner/service.js';
 import { createTeachbackService } from './teachback/service.js';
 import { createApp } from './app.js';
+import { provisionTeamAccounts } from './auth/team.js';
 
 const logger = createLogger({ level: process.env.LOG_LEVEL ?? (config.env === 'production' ? 'info' : 'debug') });
 
 const store = await createStore({ dataDir: config.dataDir, logger });
+// The five authorised teammates get an account once, with a temporary password
+// they must replace at first sign-in. Existing accounts are never touched.
+if (config.auth.mode === 'required') {
+  await provisionTeamAccounts({ store, logger });
+}
 const retrieval = createRetrievalService({ store, config, logger });
 const provider = createProvider(config.ai, logger);
 const teacher = createTeacher({ retrieval, provider, config, logger });

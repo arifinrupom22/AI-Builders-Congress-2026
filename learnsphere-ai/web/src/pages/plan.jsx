@@ -27,6 +27,27 @@ const isoInDays = (days) => {
   return date.toISOString().slice(0, 10);
 };
 
+/** An exam date as a real date. Parsed as local midnight so no timezone shifts the day. */
+function formatExamDate(iso) {
+  const date = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+/**
+ * An unnamed plan is stored as "Plan to 2026-12-07". Showing that raw ISO date
+ * next to the exam date printed it twice, so the date inside the title is
+ * replaced with the formatted one instead.
+ */
+function planTitle(plan) {
+  return plan.title.includes(plan.examDate) ? plan.title.replace(plan.examDate, formatExamDate(plan.examDate)) : plan.title;
+}
+
+/** A stable label for the plan switcher: a custom name still needs its exam date. */
+function planLabel(plan) {
+  return plan.title.includes(plan.examDate) ? planTitle(plan) : `${plan.title} · exam ${formatExamDate(plan.examDate)}`;
+}
+
 function formatDay(iso, language) {
   const date = new Date(`${iso}T00:00:00Z`);
   return date.toLocaleDateString(language === 'bn' ? 'bn-BD' : 'en-GB', {
@@ -451,7 +472,7 @@ export default function PlanPage({ route }) {
           >
             {plans.map((entry) => (
               <option key={entry.id} value={entry.id}>
-                {entry.title} · {entry.examDate}
+                {planLabel(entry)}
               </option>
             ))}
             <option value="__new">+ New plan</option>
@@ -494,8 +515,8 @@ export default function PlanPage({ route }) {
       ) : (
         <>
           <Card
-            title={plan.title}
-            subtitle={`Exam ${plan.examDate}${daysUntilExam != null ? ` · in ${Math.max(0, daysUntilExam)} day${daysUntilExam === 1 ? '' : 's'}` : ''} · ${plan.minutesPerDay} min on ${plan.daysPerWeek} day(s)/week`}
+            title={planTitle(plan)}
+            subtitle={`Exam ${formatExamDate(plan.examDate)}${daysUntilExam != null ? ` · in ${Math.max(0, daysUntilExam)} day${daysUntilExam === 1 ? '' : 's'}` : ''} · ${plan.minutesPerDay} min on ${plan.daysPerWeek} ${plan.daysPerWeek === 1 ? 'day' : 'days'}/week`}
             actions={
               <div className="row-actions">
                 <Button variant="ghost" size="sm" icon="refresh" loading={busy} onClick={refreshPlan}>

@@ -9,6 +9,10 @@ import react from '@vitejs/plugin-react';
  * page would render the API's 404/HTML instead of the app (and a 502 whenever
  * the backend is not running).
  */
+/** API port the dev proxy talks to: mirrors the server's own validation. */
+const configuredPort = Number(process.env.PORT);
+const apiPort = Number.isInteger(configuredPort) && configuredPort >= 1 && configuredPort <= 65535 ? configuredPort : 8787;
+
 export default defineConfig(({ command }) => {
   /**
    * The published bundle is always a production bundle, but a hosting
@@ -53,7 +57,12 @@ export default defineConfig(({ command }) => {
       host: process.env.VITE_HOST === '127.0.0.1' ? '127.0.0.1' : true,
       proxy: {
         '/api': {
-          target: process.env.VITE_API_TARGET || `http://localhost:${process.env.PORT || 8787}`,
+          // `PORT || 8787` is not enough: a shell (or a .env file loader) that
+          // exports PORT=0 makes it truthy, so the proxy would target port 0 and
+          // turn every request into a 502 while the API was healthy on 8787.
+          // The API itself rejects 0 and falls back to 8787, so the proxy must
+          // agree with it.
+          target: process.env.VITE_API_TARGET || `http://localhost:${apiPort}`,
           changeOrigin: false,
         },
       },

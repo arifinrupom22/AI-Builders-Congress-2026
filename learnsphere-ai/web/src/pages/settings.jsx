@@ -325,7 +325,7 @@ function DataRightsCard() {
               disabled={account ? password.length === 0 : confirmText !== 'DELETE'}
               onClick={remove}
             >
-              {account ? t('settings.deleteButton') : t('settings.deleteDemoButton')}
+              {t('settings.deleteButton')}
             </Button>
           </div>
         </div>
@@ -413,24 +413,30 @@ export default function SettingsPage() {
           </Alert>
         ) : null}
 
-        <h3 className="subhead">Optional: enable a live model</h3>
-        <p className="muted">
-          The app is fully usable without a key. Adding one upgrades the wording of answers and quizzes;
-          retrieval, citations and the quiz fallback stay exactly the same.
-        </p>
-        <pre className="code-block">{ENV_SNIPPET}</pre>
-        <p className="muted-xs">
-          Supported provider ids:{' '}
-          {PROVIDER_IDS.map((id) => (
-            <span key={id} className="term-chip">
-              {id}
-            </span>
-          ))}
-        </p>
-        <p className="muted-xs">
-          See <code className="md-code">.env.example</code> in the project root for the full list, including
-          per-provider privacy notes. The API key is read only by the server and is never sent to this page.
-        </p>
+        {/* Only worth showing while no model is answering: on a live deployment
+            "adding a key" instructions read like the key is missing. */}
+        {ai?.mode === 'live' ? null : (
+          <>
+            <h3 className="subhead">Optional: enable a live model</h3>
+            <p className="muted">
+              The app is fully usable without a key. Adding one upgrades the wording of answers and quizzes;
+              retrieval, citations and the quiz fallback stay exactly the same.
+            </p>
+            <pre className="code-block">{ENV_SNIPPET}</pre>
+            <p className="muted-xs">
+              Supported provider ids:{' '}
+              {PROVIDER_IDS.map((id) => (
+                <span key={id} className="term-chip">
+                  {id}
+                </span>
+              ))}
+            </p>
+            <p className="muted-xs">
+              See <code className="md-code">.env.example</code> in the project root for the full list, including
+              per-provider privacy notes. The API key is read only by the server and is never sent to this page.
+            </p>
+          </>
+        )}
       </Card>
 
       {config?.auth?.accounts ? <AccountCard /> : <StudyProfileCard />}

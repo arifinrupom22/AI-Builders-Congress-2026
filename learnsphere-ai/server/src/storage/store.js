@@ -168,7 +168,7 @@ export async function createStore({ dataDir, logger }) {
 
     // --- accounts -----------------------------------------------------------
     /** Internal record, including the password hash. Never send this out. */
-    async createUserRecord({ email, emailKey, displayName, passwordHash }) {
+    async createUserRecord({ email, emailKey, displayName, passwordHash, mustChangePassword = false }) {
       const record = {
         id: crypto.randomUUID(),
         email,
@@ -186,6 +186,9 @@ export async function createStore({ dataDir, logger }) {
           daysPerWeek: null,
         },
         onboardingCompleted: false,
+        // Set for a server-provisioned bootstrap password; the API blocks every
+        // learning route until the owner sets a real one.
+        mustChangePassword: mustChangePassword === true,
         createdAt: nowIso(),
         updatedAt: nowIso(),
       };
@@ -223,13 +226,15 @@ export async function createStore({ dataDir, logger }) {
       return updated;
     },
 
-    async setUserPassword(userId, passwordHash) {
+    async setUserPassword(userId, passwordHash, { mustChangePassword } = {}) {
       let updated = null;
       await users.update((list) => {
         const idx = list.findIndex((u) => u.id === userId);
         if (idx === -1) return;
-        list[idx] = { ...list[idx], passwordHash, updatedAt: nowIso() };
-        updated = list[idx];
+        const next = { ...list[idx], passwordHash, updatedAt: nowIso() };
+        if (typeof mustChangePassword === 'boolean') next.mustChangePassword = mustChangePassword;
+        list[idx] = next;
+        updated = next;
       });
       return updated;
     },

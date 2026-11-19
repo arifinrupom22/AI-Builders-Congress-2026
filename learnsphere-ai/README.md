@@ -26,6 +26,9 @@ only the passages retrieved for a single question are sent to it.
 
 - **AI Teacher** — ask about your own material; every answer cites the document, page and
   passage it used, and says so honestly when the material does not support an answer.
+  Follow-ups ("aro bolo", "example dao", "why?") continue the same topic with citations
+  instead of starting over, and questions about current events are answered with an explicit
+  freshness caveat rather than a confident guess from a frozen model.
 - **Uploads** — PDF, DOCX/DOC, RTF, ODT, Markdown and plain text, with the extraction result
   shown (including warnings and page counts).
 - **Study summaries, Visual Study Studio and Learning Path** — cited notes, concept maps,
@@ -63,6 +66,48 @@ component estimates ability, predicts a grade, or claims mastery or learning gai
 With `LEARNSPHERE_AI_PROVIDER=none` (the default) no text leaves the machine: extraction,
 retrieval, citations, summaries, flashcards, paths, quizzes and the coach all run locally.
 
+### More than one AI provider
+
+The provider is a chain, not a single key. Set `LEARNSPHERE_AI_FALLBACK1_PROVIDER` and
+`LEARNSPHERE_AI_FALLBACK1_API_KEY` (up to three slots, `FALLBACK2`, `FALLBACK3`) and a failing
+primary is skipped instead of failing the request: a rate-limited Groq key hands over to a Gemini
+key, a bad key moves on immediately without burning quota, and a 5xx is retried a few times first.
+The answer is tagged with the provider that produced it, so the transcript and the logs say which
+key answered. If every provider fails, the deterministic local teacher answers and the student is
+told what broke - the AI Teacher never shows an error page for a provider outage.
+
+### Bangla, Banglish and English
+
+A question written in Bangla script gets a Bangla answer. A question written in **Banglish**
+("photosynthesis ki vabe hoy", "Bangla e bujhao") is Bangla typed in Latin letters, so it also gets
+a Bangla answer in the same style rather than an English one; the tutor prompt says so explicitly,
+because Latin letters alone used to be read as English. Retrieval strips Banglish function words
+and expands known spelling variants, so a Banglish question can still match English notes.
+
+### Conversation memory and follow-ups
+
+Each question is sent with the last few turns of the session, and a short continuation
+("aro bolo", "eta bujhlam na", "example dao", "why?", "explain more") is treated as a
+follow-up: retrieval re-runs on the previous question plus the new text, and the prompt tells
+the model to add new detail instead of restating the previous answer. A follow-up also inherits
+the language of the turn it continues, so a Bangla conversation does not flip to English
+because "aro bolo" is typed in Latin letters.
+
+Answers are also normalised after generation: a Bangla answer gets Bangla section headings
+instead of the English template, invisible zero-width joiners from copied Bangla text are
+removed, and stray LaTeX escapes (`\(N\)`) are cleaned up. The body is never rewritten.
+
+### Questions about current events
+
+The model has no browsing and its training data has a cutoff, so a question such as "who is the
+prime minister now?" or "was there a lockdown today?" is flagged as time-sensitive before
+generation. The prompt then forbids naming any current office-holder or asserting a
+"today" fact, and the response carries a `time_sensitive_unverified` warning plus provenance
+that says the information may be out of date. The answer explains only the parts that do not
+change (what the office is, how a process works) and points the student to a live source.
+This prevents the failure mode where a stale model states an outdated office-holder as current
+fact. Live news is **not** fetched - see [What is not implemented](#what-is-not-implemented).
+
 ## Accounts, identity and data isolation
 
 The server has two identity modes, chosen with `AUTH_MODE`:
@@ -99,6 +144,31 @@ In `required` mode:
   on non-production deployments the one-time token is returned to the page (labelled as a
   development token, `AUTH_DEV_RESET=0` disables it); production must configure delivery, and
   nothing is exposed there.
+
+### Authorised accounts
+
+This deployment is invitation-only. Five team addresses may hold an account, and the list lives
+on the server (`server/src/auth/team.js`) — it is never sent to the browser, so a visitor cannot
+enumerate who has access.
+
+- `AUTH_REGISTRATION_POLICY=allowlist` (the default) accepts a sign-up only for those addresses,
+  and registers the person under their team name rather than a typed one. `open` accepts any
+  address and exists for a deployment that wants public sign-up.
+- The shared team password is configuration, not source: it is read from `TEAM_BOOTSTRAP_PASSWORD`
+  in `.env` (git-ignored) and there is no built-in fallback. Quote the value if it contains `#`,
+  because an unquoted `#` starts a comment: `TEAM_BOOTSTRAP_PASSWORD='your password'`. With no
+  value set, a `required` server creates no accounts and logs a warning instead of inventing one.
+- `npm run team:set-password` is the supported reset. It updates the five accounts **in place**
+  (same ids, profile, materials, progress, plans and live sessions), gives each account its own
+  scrypt hash with its own random salt, and clears `mustChangePassword`. The password is never
+  written to storage, the bundle or the logs.
+- Provisioning at startup stays non-destructive: it creates missing accounts and never touches an
+  account that already exists, so a restart cannot reset a password someone has chosen.
+- The first-login gate still exists for accounts flagged `mustChangePassword` (for example after
+  an administrator sets a temporary password on a single record): every learning route answers
+  `403 password_change_required` until the owner sets a real one. `POST /api/account/password`
+  verifies the current password, enforces the 10-character minimum, clears the flag, revokes
+  **every** session and issues one fresh session, so a change also signs out other devices.
 
 Local-mode data is **not** silently migrated into an account. The two are separate learners by
 design; moving a library between them would be a data migration, and this build does not do one.
@@ -190,6 +260,33 @@ Validation notes:
 - `npm run build` is required before `npm run start` serves the SPA, and before the
   “no key in the bundle” test can inspect `web/dist`.
 
+## Demo walkthrough
+
+A three-minute judging path through the product:
+
+1. `npm install && npm run dev` — API on 8787, web on 5173. Without an AI key
+   the teacher, quizzes, summaries, flashcards and the plan still work from the
+   deterministic local engine.
+2. Open **My Materials** and upload several files from `samples/` (PDF, DOCX,
+   Markdown and Bangla text). The extraction result, page count and warnings are
+   shown for each one.
+3. Open **AI Teacher** and ask a question the material answers, e.g.
+   "What is a database transaction?". The answer cites document, page and
+   passage, and the retrieval panel lists the passages used.
+4. Ask a follow-up ("aro bolo", "example dao"). It stays on the same topic and
+   keeps citations, instead of starting a new answer.
+5. Ask something outside the material ("what is a hash table?") to see the
+   general-knowledge label, then ask a current-affairs question ("who is the
+   prime minister now?") to see the freshness caveat instead of a confident
+   stale fact.
+6. Generate a **Practice** quiz, rate a couple of **Flashcards** in **Due for
+   review**, then paste a syllabus in **Study plan** to show topics mapped to
+   uploaded files, the gaps, and a daily schedule that can be edited and paused.
+
+The web app is account-protected by default in production; the team accounts are
+provisioned from `.env` (see [Accounts, identity and data isolation](#accounts-identity-and-data-isolation)).
+`AUTH_MODE=local` is the single-profile demo mode and is not authentication.
+
 ## Deployment
 
 The SPA and the Express API deploy separately:
@@ -248,6 +345,9 @@ Stated plainly so nobody plans around a feature that is not there:
 - **No OCR.** Scanned/image-only PDFs extract no text; the upload is kept with an explicit
   extraction warning and nothing is indexed, so those pages are reported as uncovered — never
   as covered. External OCR is not called.
+- **No live web or news access.** A current-affairs question is answered with an explicit
+  "I cannot verify this, check a live source" caveat instead of a guess; adding real-time news
+  grounding needs a search API key and is not wired in this build.
 - **No offline/PWA mode and no voice input/output.** Private study files are never cached for
   offline use.
 - **No asynchronous AI job queue.** Requests are synchronous, bounded by the provider timeout
@@ -261,8 +361,6 @@ Stated plainly so nobody plans around a feature that is not there:
   single-use, expiring tokens; all sessions revoked on reset), but no mail provider is bundled.
   Outside production the token is shown on the page for local/demo use; production needs a
   delivery integration before the reset link can leave the server.
-- **OCR, voice and offline/PWA are not implemented**, so scanned-only PDFs and voice questions
-  are out of scope rather than faked.
 - **Rate limiting is in-memory per process**, so it is exact for one instance and indicative
   for more.
 - **No spaced-repetition algorithm changes**: the review queue is derived from the learner's own

@@ -20,7 +20,8 @@
     "build": "npm run build --workspace web",
     "test": "npm run test --workspace server",
     "test:eval": "npm run test:eval --workspace server",
-    "samples:seed": "node scripts/seed-samples.mjs"
+    "samples:seed": "node scripts/seed-samples.mjs",
+    "team:set-password": "node scripts/set-team-passwords.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.2.5"

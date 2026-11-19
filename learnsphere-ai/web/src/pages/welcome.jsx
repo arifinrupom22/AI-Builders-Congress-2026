@@ -2,8 +2,8 @@
  * Public welcome page.
  *
  * This is what a signed-out visitor sees at `/`. It is a real page with working
- * links: Log in and Create account go to the auth routes, and on a demo
- * deployment a single clearly-labelled button opens the demo profile instead.
+ * links: Explore LearnSphere opens the sign-in form, Create account opens the
+ * invitation-only registration form. Nothing private is reachable from here.
  */
 import { useApp } from '../store/AppContext.jsx';
 import { PublicChrome } from '../components/PublicChrome.jsx';
@@ -22,9 +22,8 @@ const STEPS = [
   { n: '03', title: 'welcome.step3', body: 'welcome.step3b' },
 ];
 
-export default function WelcomePage({ onDemo }) {
-  const { t, config } = useApp();
-  const demoMode = config?.auth?.mode !== 'required';
+export default function WelcomePage() {
+  const { t } = useApp();
 
   return (
     <PublicChrome>
@@ -35,25 +34,13 @@ export default function WelcomePage({ onDemo }) {
           <p className="hero__lead">{t('welcome.lead')}</p>
 
           <div className="hero__actions">
-            {demoMode ? (
-              <>
-                <a className="ls-btn ls-btn--primary ls-btn--md" href="#/dashboard" onClick={onDemo}>
-                  {t('welcome.ctaDemo')}
-                  <Icon name="arrowRight" size={17} />
-                </a>
-                <span className="hero__demo-note">{t('welcome.demoNote')}</span>
-              </>
-            ) : (
-              <>
-                <a className="ls-btn ls-btn--primary ls-btn--md" href="#/signup">
-                  {t('welcome.ctaSignup')}
-                  <Icon name="arrowRight" size={17} />
-                </a>
-                <a className="ls-btn ls-btn--secondary ls-btn--md" href="#/login">
-                  {t('welcome.ctaLogin')}
-                </a>
-              </>
-            )}
+            <a className="ls-btn ls-btn--primary ls-btn--md" href="#/login">
+              {t('welcome.ctaExplore')}
+              <Icon name="arrowRight" size={17} />
+            </a>
+            <a className="ls-btn ls-btn--secondary ls-btn--md" href="#/signup">
+              {t('welcome.ctaSignup')}
+            </a>
           </div>
 
           <p className="hero__privacy">

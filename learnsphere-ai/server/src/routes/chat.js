@@ -43,6 +43,21 @@ export function chatRouter({ store, teacher, config }) {
     }
     if (!session) session = await store.createSession(req.learnerId);
 
+    // The last thing the student asked, so a follow-up instruction such as
+    // "answer it in English" can re-answer it instead of being searched.
+    const previousQuestion =
+      [...(session.messages ?? [])].reverse().find((message) => message.role === 'user')?.content ?? null;
+
+    // The last few turns, so a follow-up ("aro bolo") continues the same topic
+    // instead of being searched as a brand-new question.
+    const history = (session.messages ?? [])
+      .slice(-6)
+      .map((message) => ({
+        role: message.role === 'assistant' ? 'assistant' : 'user',
+        content: String(message.content ?? '').slice(0, 1200),
+      }))
+      .filter((message) => message.content.trim().length > 0);
+
     const startedAt = Date.now();
     const result = await teacher.answer({
       learnerId: req.learnerId,
@@ -50,6 +65,8 @@ export function chatRouter({ store, teacher, config }) {
       mode: body.mode,
       length: body.length,
       materialIds,
+      previousQuestion,
+      history,
     });
 
     const now = new Date().toISOString();

@@ -10,7 +10,14 @@ import express from 'express';
 import { z } from 'zod';
 import AppError from '../errors.js';
 import { parseBody } from './validate.js';
-import { clearedCsrfCookie, clearedSessionCookie, isSecureRequest } from '../middleware/auth.js';
+import {
+  clearedCsrfCookie,
+  clearedSessionCookie,
+  csrfCookie,
+  isSecureRequest,
+  sessionCookie,
+} from '../middleware/auth.js';
+import { PASSWORD_MAX, PASSWORD_MIN } from '../auth/service.js';
 
 const LEVELS = ['school', 'college', 'undergraduate', 'postgraduate', 'self-taught', 'other'];
 
@@ -31,6 +38,11 @@ const profileBody = z.object({
 const deleteBody = z.object({
   password: z.string().max(200).optional(),
   confirm: z.string().optional(),
+});
+
+const passwordBody = z.object({
+  currentPassword: z.string().min(1).max(PASSWORD_MAX),
+  newPassword: z.string().min(PASSWORD_MIN).max(PASSWORD_MAX),
 });
 
 export function accountRouter({ store, authService, config }) {
@@ -74,6 +86,39 @@ export function accountRouter({ store, authService, config }) {
       onboardingCompleted: updated.onboardingCompleted,
     });
     res.json({ user: { ...req.auth.user, profile: updated.profile, onboardingCompleted: updated.onboardingCompleted } });
+  });
+
+  /**
+   * Change the password of the signed-in account. The current password is
+   * required, the normal minimum is enforced, and every other session is
+   * revoked (the caller gets a fresh one) so a change also signs out anyone
+   * else who was holding the old session.
+   */
+  router.post('/password', async (req, res) => {
+    if (!req.auth?.authenticated) {
+      throw new AppError('Sign in to change your password.', {
+        status: 401,
+        code: 'authentication_required',
+        expose: true,
+      });
+    }
+    const body = parseBody(passwordBody, req.body);
+    const { user, session } = await authService.changePassword({
+      userId: req.auth.user.id,
+      currentPassword: body.currentPassword,
+      newPassword: body.newPassword,
+    });
+    const maxAgeMs = Math.max(0, Date.parse(session.expiresAt) - Date.now());
+    const secure = isSecureRequest(req);
+    res.append('Set-Cookie', sessionCookie(session.token, { maxAgeMs, secure }));
+    res.append('Set-Cookie', csrfCookie(session.csrfToken, { maxAgeMs, secure }));
+    req.log.info('password changed', { userId: user.id });
+    res.json({
+      user,
+      expiresAt: session.expiresAt,
+      csrfToken: session.csrfToken,
+      message: 'Password updated. Other devices were signed out.',
+    });
   });
 
   router.get('/export', async (req, res) => {

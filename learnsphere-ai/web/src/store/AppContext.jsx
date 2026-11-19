@@ -280,6 +280,21 @@ export function AppProvider({ children }) {
     [],
   );
 
+  /**
+   * Replace the password of the signed-in account. The server verifies the
+   * current one, revokes the other sessions and returns a fresh session, which
+   * `applySession` stores so this tab stays signed in.
+   */
+  const changePassword = useCallback(
+    async (currentPassword, newPassword) => {
+      const session = await api.changePassword({ currentPassword, newPassword });
+      await applySession(session);
+      notify('Password updated. Other devices were signed out.', 'success');
+      return session.user;
+    },
+    [applySession, notify],
+  );
+
   const deleteAccount = useCallback(
     async (payload) => {
       const result = await api.deleteAccount(payload);
@@ -318,6 +333,7 @@ export function AppProvider({ children }) {
       setLanguage,
       t,
       updateProfile,
+      changePassword,
       deleteAccount,
       config,
       health,
@@ -360,6 +376,7 @@ export function AppProvider({ children }) {
       setLanguage,
       t,
       updateProfile,
+      changePassword,
       deleteAccount,
       config,
       health,

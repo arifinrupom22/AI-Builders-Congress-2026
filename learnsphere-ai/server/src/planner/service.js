@@ -372,6 +372,29 @@ export function createPlannerService({ store, retrieval, dnaService, flashcardSe
       }
     }
 
+    // An edit can change which dates are scheduled (fewer days per week), and a
+    // completed or paused task used to disappear with its old date. The
+    // student's own decisions are not the schedule's to discard, so any such
+    // task the rebuild no longer produces moves to the nearest scheduled day,
+    // keeping its id (and therefore its status) intact.
+    const seen = new Set(days.flatMap((day) => day.tasks.map((task) => task.id)));
+    const carried = [];
+    for (const day of previousDays) {
+      for (const task of day.tasks ?? []) {
+        if (task.status !== 'done' && task.status !== 'paused') continue;
+        if (seen.has(task.id)) continue;
+        seen.add(task.id);
+        carried.push({ date: day.date, task });
+      }
+    }
+    if (carried.length > 0 && days.length === 0) {
+      days.push({ date: carried[0].date, tasks: [] });
+    }
+    for (const { date, task } of carried) {
+      const target = days.find((day) => day.date >= date) ?? days[days.length - 1];
+      if (target) target.tasks.push(task);
+    }
+
     return days;
   }
 

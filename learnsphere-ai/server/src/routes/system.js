@@ -33,6 +33,13 @@ export function systemRouter({ store, retrieval, teacher, config, startedAt = Da
         configured: config.ai.configured,
         mode: config.ai.configured ? 'live' : 'demo',
         missingEnvVars: config.ai.missing,
+        // Provider ids and model names only: never the keys. This is the
+        // quickest way to confirm the backup chain a deployment actually runs.
+        fallbacks: (config.ai.fallbacks ?? []).map((fallback) => ({
+          slot: fallback.slot,
+          providerId: fallback.providerId,
+          model: fallback.model || null,
+        })),
       },
       auth: {
         mode: config.auth.mode,

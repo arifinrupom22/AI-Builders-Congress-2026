@@ -47,10 +47,6 @@ const en = {
   'shell.accountSettings': 'Account settings',
   'shell.openNav': 'Open navigation',
   'shell.closeNav': 'Close navigation',
-  'shell.demoBadge': 'Demo mode',
-  'shell.demoTitle': 'This is a single-user demo. Data is scoped by a browser profile id, not an account.',
-  'shell.demoBanner':
-    'Demo mode: your library belongs to a browser profile, not an account. Sign-in is unavailable on this deployment.',
   'shell.footer': 'International AI Builders Congress 2026 · Challenge: AI Teacher · Team NITER_Parallax',
   'shell.footerNote': 'Answers are citation-verified against your own uploads. LearnSphere AI never measures mastery.',
 
@@ -60,8 +56,10 @@ const en = {
     'LearnSphere AI turns your PDFs, notes and slides into cited answers, grounded quizzes, flashcards and a study plan — in English or Bangla. Your uploads stay in your own account.',
   'welcome.ctaLogin': 'Log in',
   'welcome.ctaSignup': 'Create account',
-  'welcome.ctaDemo': 'Explore the demo',
-  'welcome.demoNote': 'This deployment runs in demo mode, so there is no account to sign in to.',
+  'welcome.ctaExplore': 'Explore LearnSphere',
+  'auth.inviteOnlyTitle': 'Invitation only',
+  'auth.inviteOnlyBody':
+    'LearnSphere AI is invitation-only: the five team email addresses on the access list can create an account. Ask the team if your address is missing.',
   'welcome.f1t': 'Answered from your documents',
   'welcome.f1b': 'Every claim carries the page it came from. When the material does not cover a question, the tutor says so instead of inventing an answer.',
   'welcome.f2t': 'Practice that shows its evidence',
@@ -105,7 +103,6 @@ const en = {
   'auth.created': 'Account created. Welcome to LearnSphere AI.',
   'auth.loginFailed': 'Sign-in failed',
   'auth.signupFailed': 'Account could not be created',
-  'auth.demoNotice': 'Accounts are off on this deployment. Use the demo instead.',
   'auth.sessionNote': 'Your session lives in a secure, HttpOnly cookie. The browser never stores your password.',
 
   'reset.title': 'Reset your password',
@@ -166,7 +163,6 @@ const en = {
   'settings.deleteHint':
     'This removes every material, extracted passage, chat, quiz, attempt, flashcard, visual, learning path and plan, then deletes the account. It cannot be undone.',
   'settings.deleteButton': 'Delete account',
-  'settings.deleteDemoButton': 'Delete demo data',
   'settings.deleteConfirm': 'Type DELETE to confirm',
   'settings.deletePassword': 'Confirm with your password',
   'settings.deleted': 'Your data has been deleted.',
@@ -213,10 +209,6 @@ const bn = {
   'shell.accountSettings': 'অ্যাকাউন্ট সেটিংস',
   'shell.openNav': 'নেভিগেশন খুলুন',
   'shell.closeNav': 'নেভিগেশন বন্ধ করুন',
-  'shell.demoBadge': 'ডেমো মোড',
-  'shell.demoTitle': 'এটি একটি একক-ব্যবহারকারীর ডেমো। ডেটা অ্যাকাউন্টে নয়, ব্রাউজার প্রোফাইল আইডিতে সীমাবদ্ধ।',
-  'shell.demoBanner':
-    'ডেমো মোড: আপনার লাইব্রেরি অ্যাকাউন্টের নয়, এই ব্রাউজার প্রোফাইলের। এই ডেপ্লয়মেন্টে সাইন-ইন নেই।',
   'shell.footer': 'International AI Builders Congress 2026 · Challenge: AI Teacher · Team NITER_Parallax',
   'shell.footerNote': 'উত্তরগুলো আপনার নিজের আপলোডের সাথে যাচাই করা। LearnSphere AI কখনো দক্ষতা মাপে না।',
 
@@ -226,8 +218,10 @@ const bn = {
     'LearnSphere AI আপনার পিডিএফ, নোট আর স্লাইড থেকে উৎসসহ উত্তর, প্রাসঙ্গিক কুইজ, ফ্ল্যাশকার্ড ও পড়ার পরিকল্পনা তৈরি করে — বাংলা বা ইংরেজিতে। আপনার আপলোড আপনার নিজের অ্যাকাউন্টেই থাকে।',
   'welcome.ctaLogin': 'লগ ইন',
   'welcome.ctaSignup': 'অ্যাকাউন্ট খুলুন',
-  'welcome.ctaDemo': 'ডেমো দেখুন',
-  'welcome.demoNote': 'এই ডেপ্লয়মেন্ট ডেমো মোডে চলছে, তাই সাইন ইন করার অ্যাকাউন্ট নেই।',
+  'welcome.ctaExplore': 'LearnSphere শুরু করুন',
+  'auth.inviteOnlyTitle': 'শুধুমাত্র আমন্ত্রিতদের জন্য',
+  'auth.inviteOnlyBody':
+    'LearnSphere AI শুধুমাত্র আমন্ত্রিতদের জন্য: অ্যাক্সেস তালিকার পাঁচটি টিম ইমেইল দিয়েই অ্যাকাউন্ট তৈরি করা যাবে। আপনার ঠিকানা না থাকলে টিমকে জানান।',
   'welcome.f1t': 'আপনার নথি থেকেই উত্তর',
   'welcome.f1b': 'প্রতিটি দাবির সাথে তার পৃষ্ঠা দেখানো হয়। উপকরণে উত্তর না থাকলে শিক্ষক বানিয়ে না বলে জানিয়ে দেন।',
   'welcome.f2t': 'প্রমাণসহ অনুশীলন',
@@ -271,7 +265,6 @@ const bn = {
   'auth.created': 'অ্যাকাউন্ট তৈরি হয়েছে। LearnSphere AI-তে স্বাগতম।',
   'auth.loginFailed': 'সাইন ইন ব্যর্থ',
   'auth.signupFailed': 'অ্যাকাউন্ট তৈরি করা যায়নি',
-  'auth.demoNotice': 'এই ডেপ্লয়মেন্টে অ্যাকাউন্ট বন্ধ। ডেমো ব্যবহার করুন।',
   'auth.sessionNote': 'আপনার সেশন নিরাপদ HttpOnly কুকিতে থাকে। ব্রাউজার আপনার পাসওয়ার্ড সংরক্ষণ করে না।',
 
   'reset.title': 'পাসওয়ার্ড রিসেট',
@@ -331,7 +324,6 @@ const bn = {
   'settings.deleteHint':
     'এটি সব উপকরণ, প্যাসেজ, চ্যাট, কুইজ, প্রচেষ্টা, ফ্ল্যাশকার্ড, ভিজ্যুয়াল, শেখার পথ ও পরিকল্পনা মুছে অ্যাকাউন্টও মুছে ফেলবে। ফেরানো যাবে না।',
   'settings.deleteButton': 'অ্যাকাউন্ট মুছুন',
-  'settings.deleteDemoButton': 'ডেমো ডেটা মুছুন',
   'settings.deleteConfirm': 'নিশ্চিত করতে DELETE লিখুন',
   'settings.deletePassword': 'পাসওয়ার্ড দিয়ে নিশ্চিত করুন',
   'settings.deleted': 'আপনার ডেটা মুছে ফেলা হয়েছে।',

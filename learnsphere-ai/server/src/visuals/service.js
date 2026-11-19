@@ -17,11 +17,18 @@
  *     is built locally and extractively - sentences quoted unchanged from the
  *     learner's own material, the same way the local study summary works.
  */
-import { contentTokens, sentences } from '../retrieval/tokenize.js';
+import { contentTokens, sentences, detectQuestionLanguage } from '../retrieval/tokenize.js';
 import { extractKeyTerms } from '../ai/keyterms.js';
 import { preparePassages, screenPassage } from '../ai/grounding.js';
 import { buildVisualMessages } from '../ai/prompts.js';
 import { selectSpread } from '../summary/service.js';
+import {
+  normaliseExplanation,
+  buildLocalExplanation,
+  explanationSourceIds,
+  explanationToText,
+  clipAtWord,
+} from './explanation.js';
 
 export const VISUAL_KINDS = [
   {
@@ -132,9 +139,34 @@ function stripLeadingHeading(text, passage) {
   return text.slice(heading.length).replace(/^[\s\-\u2013\u2014:|]+/, '').trim() || text;
 }
 
+/**
+ * Trim to a length the layout can hold without cutting a word in half.
+ * Mid-word ellipses ("thylakoid mem...") were part of why labels read as noise.
+ */
 function clip(text, max) {
-  const clean = String(text ?? '').replace(/\s+/g, ' ').trim();
-  return clean.length <= max ? clean : `${clean.slice(0, max - 1).trimEnd()}\u2026`;
+  return clipAtWord(text, max);
+}
+
+/**
+ * A title a student can recognise.
+ *
+ * The old fallback was the first recurring keyword, which produced titles like
+ * "sunlight" for a photosynthesis map. Name the subject AND the shape of the
+ * page instead.
+ */
+export function buildTitle({ topic = '', kind, signals, documents = [] }) {
+  const requested = String(topic ?? '').replace(/\s+/g, ' ').trim();
+  if (requested) return clip(requested, 80);
+  const term = signals?.nodeTerms?.[0]?.term ?? signals?.columns?.[0]?.term ?? '';
+  const document = documents[0] ? documents[0].replace(/\.[^.]+$/, '') : '';
+  // The document name is a better subject than the most frequent word: a
+  // photosynthesis map used to be titled "light".
+  const subject = document || term || 'Your material';
+  const shape =
+    { 'concept-map': 'how the ideas connect', flowchart: 'the process step by step', comparison: 'compared', timeline: 'timeline' }[
+      kind
+    ] ?? 'overview';
+  return clip(`${subject}: ${shape}`, 80);
 }
 
 /** Stable, filesystem-safe-ish id prefix per kind. */
@@ -340,10 +372,14 @@ export function buildLocalConceptMap({ signals }) {
     const pair = [from, to].sort().join('|');
     if (seenPairs.has(pair)) continue;
     seenPairs.add(pair);
+    // "is", "are" and "has" carry no relationship a student can use as a
+    // label; the arrow plus the relationship list already says the two ideas
+    // are connected, so a weak verb is dropped rather than printed.
+    const weak = !relation.cue || /^(is|are|was|were|has|have|had|uses|using|with)$/i.test(relation.cue.trim());
     edges.push({
       from,
       to,
-      label: relation.cue ? clip(relation.cue.toLowerCase(), 40) : null,
+      label: weak ? null : clip(relation.cue.toLowerCase(), 40),
       sourceIds: [relation.passage.id],
     });
     if (edges.length >= MAX_EDGES) break;
@@ -404,6 +440,8 @@ export function buildLocalComparison({ passages, signals }) {
       cells.push({ columnId: columns[index].id, text: clip(source.text, 220), sourceIds: [source.passage.id] });
     }
     if (!full) continue;
+    // One sentence quoted into both columns is not a contrast.
+    if (new Set(cells.map((cell) => cell.text.toLowerCase().trim())).size < 2) continue;
     rows.push({
       id: nodeId('comparison', rows.length),
       label: clip(sentence.passage.heading || `Point ${rows.length + 1}`, 60),
@@ -496,16 +534,22 @@ export function normaliseAiVisual(raw, kind, passages) {
 
   if (kind === 'concept-map') {
     const nodes = [];
-    for (const [i, node] of (Array.isArray(raw?.nodes) ? raw.nodes : []).slice(0, MAX_NODES).entries()) {
+    const labelsSeen = new Set();
+    for (const node of Array.isArray(raw?.nodes) ? raw.nodes : []) {
+      if (nodes.length >= MAX_NODES) break;
       const sourceIds = keepIds(node?.sourceIds);
-      if (!node?.label || sourceIds.length === 0) {
+      const label = clip(node?.label ?? '', 60);
+      // Two boxes with the same words are not two concepts: they are a
+      // repetition that makes the map unreadable.
+      if (!label || sourceIds.length === 0 || labelsSeen.has(label.toLowerCase())) {
         dropped += 1;
         continue;
       }
+      labelsSeen.add(label.toLowerCase());
       const id = nodeId('concept-map', nodes.length);
       nodeIds.add(id);
       sourceIds.forEach((s) => used.add(s));
-      nodes.push({ id, label: clip(node.label, 60), explanation: clip(node.explanation ?? '', 240), sourceIds });
+      nodes.push({ id, label, explanation: clip(node.explanation ?? '', 240), sourceIds });
     }
     const edges = [];
     const seen = new Set();
@@ -530,17 +574,20 @@ export function normaliseAiVisual(raw, kind, passages) {
 
   if (kind === 'flowchart') {
     const steps = [];
+    const labelsSeen = new Set();
     for (const step of Array.isArray(raw?.steps) ? raw.steps : []) {
       if (steps.length >= MAX_STEPS) break;
       const sourceIds = keepIds(step?.sourceIds);
-      if (!step?.label || sourceIds.length === 0) {
+      const label = clip(step?.label ?? '', 90);
+      if (!label || sourceIds.length === 0 || labelsSeen.has(label.toLowerCase())) {
         dropped += 1;
         continue;
       }
+      labelsSeen.add(label.toLowerCase());
       sourceIds.forEach((s) => used.add(s));
       steps.push({
         id: nodeId('flowchart', steps.length),
-        label: clip(step.label, 90),
+        label,
         detail: clip(step.detail ?? step.label, 280),
         sourceIds,
       });
@@ -574,6 +621,13 @@ export function normaliseAiVisual(raw, kind, passages) {
         cells.push({ columnId: column.id, text: clip(cell.text, 220), sourceIds });
       }
       if (!full) continue;
+      // Identical wording in both columns is not a comparison: it is one
+      // sentence printed twice and reads as a mistake.
+      const texts = cells.map((cell) => cell.text.toLowerCase().replace(/\s+/g, ' ').trim());
+      if (new Set(texts).size < 2) {
+        dropped += 1;
+        continue;
+      }
       rows.push({ id: nodeId('comparison', rows.length), label: clip(row?.label ?? `Point ${rows.length + 1}`, 60), cells });
     }
     if (rows.length < MIN_COMPARISON_ROWS) return { visual: null, dropped };
@@ -586,6 +640,18 @@ export function normaliseAiVisual(raw, kind, passages) {
       if (events.length >= MAX_EVENTS) break;
       const sourceIds = keepIds(event?.sourceIds);
       if (!event?.when || !event?.label || sourceIds.length === 0) {
+        dropped += 1;
+        continue;
+      }
+      // A date the cited passage never states is an invented date, whatever
+      // the model believes. Check the digits against the actual text.
+      const citedText = sourceIds
+        .map((id) => allowed.get(id)?.text ?? '')
+        .join(' ')
+        .toLowerCase();
+      const dateToken = toAsciiDigits(String(event.when)).toLowerCase().trim();
+      const digits = dateToken.match(/\d{4}/)?.[0] ?? dateToken;
+      if (digits && !toAsciiDigits(citedText).includes(digits)) {
         dropped += 1;
         continue;
       }
@@ -677,6 +743,8 @@ export function buildCitations(usedIds, passages) {
 export function collectSourceIds(visual) {
   const used = new Set();
   const add = (ids) => (ids ?? []).forEach((id) => used.add(id));
+  // The explanation cites passages too, so its ids must reach the citation list.
+  for (const id of explanationSourceIds(visual.explanation)) used.add(id);
   if (visual.kind === 'concept-map') {
     visual.nodes.forEach((n) => add(n.sourceIds));
     visual.edges.forEach((e) => add(e.sourceIds));
@@ -700,7 +768,7 @@ export function createVisualsService({ retrieval, provider, config, logger, stor
   /**
    * @param {{learnerId:string, materialIds?:string[]|null, topic?:string, kind?:string}} params
    */
-  async function build({ learnerId, materialIds = null, topic = '', kind = DEFAULT_VISUAL_KIND }) {
+  async function build({ learnerId, materialIds = null, topic = '', kind = DEFAULT_VISUAL_KIND, language: requestedLanguage = '' }) {
     const requestedKind = kind && kind !== 'auto' ? kind : null;
 
     // --- gather passages, exactly like the summary service does ------------
@@ -750,8 +818,22 @@ export function createVisualsService({ retrieval, provider, config, logger, stor
 
     const documents = [...new Set(ordered.map((p) => p.documentName))];
     const materials = await retrieval.listMaterials(learnerId);
-    const language =
+    const materialLanguage =
       materials.find((m) => !materialIds?.length || materialIds.includes(m.id))?.language ?? 'en';
+
+    // The page language follows what the student asked for, then what their
+    // question is written in, and only then the material's own language. Before
+    // this, a Bangla student got an English page unless the PDF's metadata said
+    // otherwise.
+    const topicLanguage = detectQuestionLanguage(topic || '');
+    const language =
+      requestedLanguage === 'en' || requestedLanguage === 'bn'
+        ? requestedLanguage
+        : topicLanguage === 'banglish' || topicLanguage === 'bn'
+          ? 'bn'
+          : topic.trim()
+            ? 'en'
+            : materialLanguage;
 
     if (ordered.length < MIN_PASSAGES) {
       return {
@@ -762,14 +844,26 @@ export function createVisualsService({ retrieval, provider, config, logger, stor
     }
 
     // --- context budget ------------------------------------------------------
-    const budget = config.retrieval.summaryChars;
-    const { selected } = selectSpread(ordered, budget);
+    // A visual needs the structure of the text, not the whole chapter: 24
+    // passages plus a teaching prompt made the model time out, and the student
+    // silently got the quoted fallback. Keep the context small enough to answer
+    // quickly, and spread it across the document so the picture is not a
+    // single page.
+    const budget = Math.min(config.retrieval.summaryChars, 5200);
+    const { selected: spread } = selectSpread(ordered, budget);
+    const selected = spread.slice(0, 10);
     const prepared = preparePassages(
       selected.map((p) => ({ ...p, passageId: p.passageId ?? p.id, score: undefined })),
       { contextChars: budget },
     );
     const passages = prepared.passages;
     const warnings = [...prepared.notes];
+    if (documents.length > 1 && !topic.trim()) {
+      warnings.push({
+        code: 'multiple_documents',
+        message: `This page draws on ${documents.length} documents at once. Add a topic focus to build it from one of them, so an unrelated document cannot wander into the picture.`,
+      });
+    }
     if (prepared.truncated) {
       warnings.push({
         code: 'context_truncated',
@@ -814,18 +908,37 @@ export function createVisualsService({ retrieval, provider, config, logger, stor
     let visual = null;
     let generationMode = 'demo';
     let fallback = null;
+    let aiExplanation = null;
+    let aiTitle = '';
     const usedKindLabel = KIND_LABEL[resolvedKind];
 
     if (provider) {
       try {
         const startedAt = Date.now();
+        // A page that takes two minutes to build is a broken page, even when
+        // the model eventually answers. Cap the first attempt and let the
+        // smaller retry below finish the job.
         const response = await provider.chat({
           messages: buildVisualMessages({ passages, kind: resolvedKind, topic: topic.trim(), language, documents }),
           temperature: 0.2,
-          maxTokens: 2400,
+          maxTokens: 2000,
+          signal: AbortSignal.timeout(26000),
         });
         const raw = parseJsonFromModel(response.content);
         const normalised = raw ? normaliseAiVisual(raw, resolvedKind, passages) : { visual: null, dropped: 0 };
+        if (raw) {
+          // The teaching text is validated exactly like the diagram: every
+          // section must cite a passage that was actually supplied.
+          aiExplanation = normaliseExplanation(raw.explanation, passages);
+          aiTitle = clip(raw.title ?? '', 80);
+          if (raw.explanation && !aiExplanation) {
+            warnings.push({
+              code: 'explanation_unverified',
+              message:
+                'The model\u2019s written explanation could not be tied to your passages, so this page explains the visual with quoted sentences from your material instead.',
+            });
+          }
+        }
         if (normalised.visual) {
           visual = normalised.visual;
           generationMode = 'live';
@@ -851,11 +964,48 @@ export function createVisualsService({ retrieval, provider, config, logger, stor
         }
       } catch (err) {
         fallback = { code: err.code ?? 'ai_provider_error', message: err.message };
-        logger.warn('ai provider failed, falling back to local visual', { kind: resolvedKind, code: fallback.code });
-        warnings.push({
-          code: 'ai_provider_fallback',
-          message: `${err.message} The visual was built locally from your material instead.`,
+        logger.warn('ai provider failed, retrying with a smaller context', {
+          kind: resolvedKind,
+          code: fallback.code,
         });
+
+        // One retry with half the passages and half the output budget: most
+        // failures here are timeouts, and the quoted fallback is a real quality
+        // drop, so it is worth a second, cheaper attempt.
+        const smaller = passages.slice(0, Math.max(4, Math.floor(passages.length / 2)));
+        try {
+          const retry = await provider.chat({
+            messages: buildVisualMessages({ passages: smaller, kind: resolvedKind, topic: topic.trim(), language, documents }),
+            temperature: 0.2,
+            maxTokens: 1600,
+            signal: AbortSignal.timeout(20000),
+          });
+          const raw = parseJsonFromModel(retry.content);
+          const normalised = raw ? normaliseAiVisual(raw, resolvedKind, smaller) : { visual: null, dropped: 0 };
+          if (normalised.visual) {
+            visual = normalised.visual;
+            generationMode = 'live';
+            fallback = null;
+            if (raw?.explanation) {
+              aiExplanation = normaliseExplanation(raw.explanation, smaller);
+              aiTitle = clip(raw.title ?? '', 80);
+            }
+            warnings.push({
+              code: 'ai_retry_smaller_context',
+              message: 'The first attempt timed out, so this page was built from the best-matching passages in a second attempt.',
+            });
+          }
+        } catch (retryErr) {
+          fallback = { code: retryErr.code ?? 'ai_provider_error', message: retryErr.message };
+          logger.warn('ai retry failed, falling back to local visual', { kind: resolvedKind, code: fallback.code });
+        }
+
+        if (visual === null) {
+          warnings.push({
+            code: 'ai_provider_fallback',
+            message: `${fallback.message} The page was built locally by quoting your material instead.`,
+          });
+        }
       }
     }
 
@@ -873,20 +1023,35 @@ export function createVisualsService({ retrieval, provider, config, logger, stor
       }
     }
 
+    // --- the teaching layer --------------------------------------------------
+    // A diagram without an explanation was the central defect: students saw
+    // labelled boxes and had to guess what they meant. Attach the model's
+    // explanation when it survived citation checking, and otherwise build the
+    // same sections from sentences quoted out of the material.
+    const explanation =
+      aiExplanation ??
+      buildLocalExplanation({ visual, passages, signals, topic: topic.trim(), documents });
+    if (explanation) visual.explanation = explanation;
+    else {
+      warnings.push({
+        code: 'explanation_missing',
+        message:
+          'The selected passages contain no sentence that could serve as an explanation, so this page shows the diagram and its sources only.',
+      });
+    }
+
     // --- citations, text version, provenance ---------------------------------
     const used = collectSourceIds(visual);
     const citations = buildCitations(used, passages);
-    const base =
-      (topic.trim() && clip(topic.trim(), 60)) ||
-      signals.nodeTerms[0]?.term ||
-      (documents[0] ? documents[0].replace(/\.[^.]+$/, '') : 'Your material');
-    const title = clip(base, 80);
+    const title = aiTitle || buildTitle({ topic: topic.trim(), kind: resolvedKind, signals, documents });
     visual.title = title;
     visual.kind = resolvedKind;
     visual.language = language;
 
     const lookup = new Map(passages.map((p) => [p.id, p]));
-    visual.textVersion = buildTextVersion(visual, { title, documents });
+    visual.textVersion = [explanationToText(explanation), buildTextVersion(visual, { title, documents })]
+      .filter(Boolean)
+      .join('\n\n');
     // Append exact source locations to the text version so it stands alone.
     const locations = [...used].sort().map((id) => {
       const p = lookup.get(id);

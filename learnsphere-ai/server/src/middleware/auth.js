@@ -188,10 +188,36 @@ export function csrfGuard({ authService }) {
   };
 }
 
+/**
+ * A server-provisioned account starts with a temporary password. Until the owner
+ * replaces it, every learning route is refused: the bootstrap credential can
+ * change the password and nothing else.
+ */
+// Public reads the app cannot boot without, plus the one route that clears the
+// flag. Without these the shell would fail to load and never reach the screen
+// that asks for the new password.
+const PASSWORD_CHANGE_ALLOWED_PATHS = new Set(['/config', '/health', '/account/password']);
+
+export function requirePasswordChange() {
+  return (req, res, next) => {
+    if (!req.auth?.authenticated) return next();
+    if (req.auth.user?.mustChangePassword !== true) return next();
+    if (PASSWORD_CHANGE_ALLOWED_PATHS.has(req.path)) return next();
+    return next(
+      new AppError('Choose your own password before using LearnSphere AI.', {
+        status: 403,
+        code: 'password_change_required',
+        expose: true,
+      }),
+    );
+  };
+}
+
 export { isSecureRequest };
 export default {
   attachSession,
   requireAuthentication,
+  requirePasswordChange,
   csrfGuard,
   parseCookies,
   sessionCookie,

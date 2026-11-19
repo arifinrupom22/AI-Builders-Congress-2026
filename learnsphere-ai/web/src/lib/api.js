@@ -176,6 +176,8 @@ export const api = {
   // --- account ---------------------------------------------------------------
   account: () => request('/account'),
   updateProfile: (patch) => request('/account/profile', { method: 'PATCH', body: patch }),
+  /** Requires the current password; the server revokes every other session. */
+  changePassword: (payload) => request('/account/password', { method: 'POST', body: payload }),
   exportAccount: () => request('/account/export'),
   deleteAccount: (payload = {}) => request('/account', { method: 'DELETE', body: payload }),
 

@@ -233,31 +233,31 @@ export default function HomePage() {
 
   return (
     <div className="page">
-      <section className="hero">
-        <div className="hero__main">
-          <span className="hero__eyebrow">
+      <section className="dash-hero">
+        <div className="dash-hero__main">
+          <span className="dash-hero__eyebrow">
             <Icon name="sparkles" size={13} /> Source-grounded AI teacher
           </span>
-          <h2 className="hero__title">Teach yourself with your own materials</h2>
-          <p className="hero__subtitle">
+          <h2 className="dash-hero__title">Teach yourself with your own materials</h2>
+          <p className="dash-hero__subtitle">
             LearnSphere AI explains, quizzes and tracks progress using only the documents you upload.
             Every answer cites the file and page it came from, and it will tell you plainly when your
             notes do not cover a question.
           </p>
-          <div className="hero__meta">
-            <span className="hero__meta-item">
+          <div className="dash-hero__meta">
+            <span className="dash-hero__meta-item">
               <Badge tone={ai?.mode === 'live' ? 'success' : 'warning'} icon={ai?.mode === 'live' ? 'sparkles' : 'shield'}>
                 {ai?.mode === 'live' ? `${ai.label} · ${ai.model}` : 'Local extractive mode'}
               </Badge>
             </span>
-            <span className="hero__meta-item">
+            <span className="dash-hero__meta-item">
               <Icon name="database" size={14} /> {formatNumber(health?.store?.passages ?? 0)} indexed passages
             </span>
-            <span className="hero__meta-item">
+            <span className="dash-hero__meta-item">
               <Icon name="user" size={14} /> Studying as {identity}
             </span>
           </div>
-          <p className="hero__privacy">
+          <p className="dash-hero__privacy">
             {ai?.mode === 'live'
               ? 'Only the retrieved passages are sent to the model — never your whole library.'
               : 'No AI key configured, so answers are assembled locally from your own text and nothing leaves this machine.'}

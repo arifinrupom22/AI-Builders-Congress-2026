@@ -621,21 +621,6 @@ a.ls-btn {
   border-top: 1px solid var(--c-border);
 }
 
-/* ---- demo banner ---- */
-.demo-banner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px var(--s4);
-  background: var(--c-warning-soft);
-  color: var(--c-warning);
-  border-bottom: 1px solid var(--c-warning-line);
-  font-size: var(--text-xs);
-  font-weight: 600;
-  justify-content: center;
-  text-align: center;
-}
-
 /* The shell's profile actions are links and buttons in the same spot. */
 .app__profile-link {
   border: 0;

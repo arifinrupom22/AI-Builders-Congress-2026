@@ -13,7 +13,7 @@ import { errorHandler, notFoundHandler } from './errors.js';
 import { requestContext, rateLimit } from './middleware/context.js';
 import { corsGuard, securityHeaders, buildAllowedOrigins } from './middleware/security.js';
 import { createUploadMiddleware } from './middleware/uploads.js';
-import { attachSession, csrfGuard, requireAuthentication } from './middleware/auth.js';
+import { attachSession, csrfGuard, requireAuthentication, requirePasswordChange } from './middleware/auth.js';
 import { createAuthService } from './auth/service.js';
 import { authRouter } from './routes/auth.js';
 
@@ -88,6 +88,8 @@ export function createApp({
   app.use('/api', requireAuthentication({ config }));
   // Cookie-authenticated writes must echo the session-bound CSRF token.
   app.use('/api', csrfGuard({ authService }));
+  // A first-login bootstrap password may only be used to replace itself.
+  app.use('/api', requirePasswordChange());
 
   // Two dimensions: a per-IP ceiling that a changed header cannot reset, and a
   // fair per-profile/account counter on top of it.

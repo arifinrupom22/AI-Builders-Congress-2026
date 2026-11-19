@@ -7,6 +7,7 @@
  */
 import { useApp } from '../store/AppContext.jsx';
 import { Icon } from './Icons.jsx';
+import { BrandLogo } from './BrandLogo.jsx';
 import { LANGUAGES } from '../lib/i18n.js';
 import { THEMES } from '../lib/theme.js';
 
@@ -55,9 +56,7 @@ export function PublicChrome({ children }) {
       </a>
       <header className="public__header">
         <a className="public__brand" href="#/">
-          <span className="public__mark" aria-hidden="true">
-            <Icon name="compass" size={20} />
-          </span>
+          <BrandLogo size={40} />
           <span>
             LearnSphere <strong>AI</strong>
           </span>

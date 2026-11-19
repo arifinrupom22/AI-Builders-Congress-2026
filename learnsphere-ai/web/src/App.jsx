@@ -23,6 +23,7 @@ import CoachPage from './pages/coach.jsx';
 import PlanPage from './pages/plan.jsx';
 import AuthPage from './pages/auth.jsx';
 import WelcomePage from './pages/welcome.jsx';
+import ChangePasswordPage from './pages/change-password.jsx';
 import OnboardingPage from './pages/onboarding.jsx';
 import QuizPage from './pages/quiz.jsx';
 import FlashcardsPage from './pages/flashcards.jsx';
@@ -103,6 +104,9 @@ function Runtime() {
   const accounts = config?.auth?.mode === 'required';
   const signedIn = Boolean(auth?.user);
   const needsOnboarding = accounts && signedIn && auth.user.onboardingCompleted !== true;
+  // A provisioned account holds a temporary password until its owner replaces
+  // it; nothing else in the app opens before that.
+  const needsPasswordChange = accounts && signedIn && auth.user.mustChangePassword === true;
 
   // Client-side routing rules. The server enforces the real boundary: these
   // redirects only keep a signed-out browser away from screens it cannot use.
@@ -127,6 +131,16 @@ function Runtime() {
       return;
     }
 
+    if (needsPasswordChange) {
+      if (path !== '/change-password') replace('/change-password');
+      return;
+    }
+
+    if (path === '/change-password') {
+      replace(needsOnboarding ? '/onboarding' : '/dashboard');
+      return;
+    }
+
     if (needsOnboarding && path !== '/onboarding') {
       replace('/onboarding');
       return;
@@ -138,7 +152,7 @@ function Runtime() {
     }
 
     if (!needsOnboarding && path === '/onboarding') replace('/dashboard');
-  }, [accounts, auth.state, bootState, needsOnboarding, route.path, signedIn]);
+  }, [accounts, auth.state, bootState, needsOnboarding, needsPasswordChange, route.path, signedIn]);
 
   // Retry in place: nothing the student already has in this browser is cleared.
   const retry = useCallback(async () => {
@@ -272,6 +286,10 @@ function Runtime() {
     );
   }
 
+  if (accounts && needsPasswordChange) {
+    return <ChangePasswordPage />;
+  }
+
   if (accounts && needsOnboarding) {
     return <OnboardingPage />;
   }
@@ -279,7 +297,7 @@ function Runtime() {
   // Welcome, sign-in and reset stay reachable once signed in only long enough
   // for the redirect above; rendering the app avoids a flash of public pages.
   if (!accounts && route.path === '/') {
-    return <WelcomePage onDemo={() => navigate('/dashboard')} />;
+    return <WelcomePage />;
   }
   if (route.path === '/login' || route.path === '/signup' || route.path === '/reset') {
     return <AuthPage route={route} />;

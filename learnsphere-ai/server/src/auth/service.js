@@ -16,6 +16,7 @@
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import AppError from '../errors.js';
+import { findTeamMember } from './team.js';
 
 const scrypt = promisify(crypto.scrypt);
 
@@ -41,7 +42,7 @@ export function isValidEmail(raw) {
   return email.length >= 3 && email.length <= EMAIL_MAX && EMAIL_RE.test(email);
 }
 
-async function hashPassword(password) {
+export async function hashPassword(password) {
   const salt = crypto.randomBytes(SALT_BYTES);
   const derived = await scrypt(password, salt, KEY_LEN, { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P });
   return `scrypt$${SCRYPT_N}$${SCRYPT_R}$${SCRYPT_P}$${salt.toString('base64')}$${derived.toString('base64')}`;
@@ -76,6 +77,10 @@ export function publicUser(user) {
     id: user.id,
     email: user.email,
     displayName: user.displayName,
+    // True while the account still holds a server-provisioned bootstrap
+    // password. The client must send the person to the password screen, and the
+    // API refuses every learning route until it is cleared.
+    mustChangePassword: user.mustChangePassword === true,
     profile: user.profile ?? {
       language: 'auto',
       level: null,
@@ -131,12 +136,32 @@ export function createAuthService({ store, config }) {
         throw AppError.badRequest(`A password can be at most ${PASSWORD_MAX} characters.`);
       }
 
+      // Invitation-only by default. The allowlist stays on the server; the
+      // rejection never says whether an address is known, only that it is not
+      // invited.
+      let allowedName = null;
+      if ((config.auth?.registrationPolicy ?? 'allowlist') === 'allowlist') {
+        const member = findTeamMember(emailKey);
+        if (!member) {
+          throw new AppError('LearnSphere AI is invitation-only. Ask the team to add your email address first.', {
+            status: 403,
+            code: 'email_not_invited',
+            expose: true,
+          });
+        }
+        allowedName = member.displayName;
+      }
+
       const passwordHash = await hashPassword(password);
       const user = await store.createUserRecord({
         email: emailKey,
         emailKey,
-        displayName: (displayName ?? '').trim().slice(0, 60) || emailKey.split('@')[0],
+        // An invited person is registered under their real team name; anyone
+        // else (open policy) keeps the name they typed.
+        displayName: allowedName || (displayName ?? '').trim().slice(0, 60) || emailKey.split('@')[0],
         passwordHash,
+        // They chose their own password, so no forced change.
+        mustChangePassword: false,
       });
       const session = await startSession(user.id);
       return { user: publicUser(user), session };
@@ -239,6 +264,40 @@ export function createAuthService({ store, config }) {
     /** Revoke every session of one account (used after a password change). */
     async logoutEverywhere(userId) {
       await store.deleteAuthSessionsForUser(userId);
+    },
+
+    /**
+     * Replace the caller's password. Requires the current password, enforces the
+     * normal minimum, clears the first-login flag and signs out every other
+     * device by revoking all sessions before issuing one fresh session.
+     */
+    async changePassword({ userId, currentPassword, newPassword }) {
+      if (typeof newPassword !== 'string' || newPassword.length < PASSWORD_MIN) {
+        throw AppError.badRequest(`Choose a password of at least ${PASSWORD_MIN} characters.`);
+      }
+      if (newPassword.length > PASSWORD_MAX) {
+        throw AppError.badRequest(`A password can be at most ${PASSWORD_MAX} characters.`);
+      }
+      const record = await store.getUserById(userId);
+      if (!record) throw AppError.notFound('That account no longer exists.');
+
+      const ok = await verifyPassword(currentPassword, record.passwordHash);
+      if (!ok) {
+        throw new AppError('Your current password is not correct.', {
+          status: 403,
+          code: 'current_password_invalid',
+          expose: true,
+        });
+      }
+      if (currentPassword === newPassword) {
+        throw AppError.badRequest('Choose a password you have not used on this account.');
+      }
+
+      const passwordHash = await hashPassword(newPassword);
+      const updated = await store.setUserPassword(userId, passwordHash, { mustChangePassword: false });
+      await store.deleteAuthSessionsForUser(userId);
+      const session = await startSession(userId);
+      return { user: publicUser(updated ?? { ...record, mustChangePassword: false }), session };
     },
 
     ttlMs,
