@@ -151,9 +151,18 @@ export function createApp({
       }),
     );
     // Express 5 removed the bare '*' route, so the SPA fallback is middleware.
+    // The whole `/api` namespace stays JSON-only (the bare `/api` path included,
+    // so it cannot be answered with HTML), and only a request that actually wants
+    // a document gets index.html - a missing asset must 404, not return HTML
+    // with a 200 that the browser then tries to parse as JavaScript or CSS.
     app.use((req, res, next) => {
       if (req.method !== 'GET' && req.method !== 'HEAD') return next();
-      if (req.path.startsWith('/api/')) return next();
+      if (req.path === '/api' || req.path.startsWith('/api/')) return next();
+      if (!req.accepts('html')) return next();
+      // A path carrying a file extension is an asset request. A missing hashed
+      // bundle must answer 404, not index.html that the browser then tries to
+      // execute as JavaScript or parse as CSS.
+      if (path.extname(req.path)) return next();
       res.setHeader('Content-Security-Policy', SPA_CSP);
       res.setHeader('Cache-Control', 'no-cache');
       return res.sendFile(path.join(webDist, 'index.html'));

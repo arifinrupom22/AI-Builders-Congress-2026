@@ -373,20 +373,36 @@ account isolation, rate limiting, CORS, secret handling and the Netlify proxy co
 
 ## Deployment
 
-The SPA and the API deploy separately, and the live instances are:
+The Express server serves the API and the built SPA, so a single Render service is the primary
+deployment:
 
-| Service | URL |
-| --- | --- |
-| Netlify (SPA + `/api/*` proxy) | https://ai-builders-congress-2026.netlify.app/ |
-| Render (Express API) | https://ai-builders-congress-2026.onrender.com |
+| Service | URL | Serves |
+| --- | --- | --- |
+| Render (primary) | https://ai-builders-congress-2026.onrender.com | SPA + `/api/*` on one origin |
+| Netlify (optional mirror) | https://ai-builders-congress-2026.netlify.app/ | prebuilt SPA + `/api/*` proxy |
 
-1. **Render** — `render.yaml` runs `npm ci` and `npm run start --workspace server`, health-checks
-   `/api/health`, and mounts the persistent disk described above.
-2. **Netlify** — build with `npm run build`, publish `web/dist`, and route `/api/*` through
-   `netlify/functions/api.mjs` to the backend. The proxy forwards multiple `Set-Cookie` headers,
-   so account sessions work through it, gives the upstream 9 seconds
+1. **Render** — `render.yaml` runs `npm ci --include=dev && npm run build`, starts
+   `npm run start --workspace server`, health-checks `/api/health`, and mounts the persistent disk
+   described above. `--include=dev` is required: `NODE_ENV=production` is set for the build step
+   too, so npm would otherwise skip the devDependencies that Vite needs. The build writes
+   `web/dist`, which `server/src/app.js` serves, and `/api/*` is routed before the SPA fallback so
+   an API path can never be answered with `index.html`.
+2. **Netlify (optional)** — build with `npm run build`, publish `web/dist`, and route `/api/*`
+   through `netlify/functions/api.mjs` to the backend. The proxy forwards multiple `Set-Cookie`
+   headers, so account sessions work through it, gives the upstream 9 seconds
    (`LEARNSPHERE_PROXY_TIMEOUT_MS`, capped below Netlify's 10-second limit), and returns a
    retryable `backend_timeout` after that.
+
+### Render environment variables
+
+| Key | Value | Notes |
+| --- | --- | --- |
+| `NODE_ENV` | `production` | Set in `render.yaml`. Also selects `AUTH_MODE=required` as the default. |
+| `LEARNSPHERE_DATA_DIR` | `/var/data/learnsphere` | Set in `render.yaml`; must stay on the mounted disk or uploads and accounts vanish on redeploy. |
+| `AUTH_MODE` | `required` | Set in `render.yaml`; every API route except health, config and auth needs a session. |
+| `TEAM_BOOTSTRAP_PASSWORD` | the team password | **Must be entered in the Render dashboard** (`sync: false`, never committed). At startup the five allowlisted accounts are created only if this is present and long enough; a service that started without it needs a restart after the value is added. Existing accounts are never touched or reset. |
+| `CORS_ALLOWED_ORIGINS` | e.g. `https://<site>` | Optional now that the SPA is same-origin; keep it only for browser clients on another origin. |
+| `LEARNSPHERE_AI_PROVIDER`, `LEARNSPHERE_AI_API_KEY`, `LEARNSPHERE_AI_MODEL` | `groq`, the key, `openai/gpt-oss-20b` | Optional; without them the app runs in local demo mode. |
 
 Set `LEARNSPHERE_BACKEND_URL` in Netlify (scope: **Functions**) when the backend is not the
 default. A folder-only static deploy does not include functions; deploy the repository.

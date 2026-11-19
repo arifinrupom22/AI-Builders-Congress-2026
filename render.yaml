@@ -4,7 +4,11 @@ services:
     runtime: node
     plan: 0.5c-512mb
     region: singapore
-    buildCommand: npm ci
+    # The Express app serves the built SPA from web/dist (server/src/app.js), so
+    # the frontend has to be built during the deploy. --include=dev is required:
+    # NODE_ENV=production below is also set for the build, which makes npm omit
+    # devDependencies, and Vite is a devDependency of the web workspace.
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: npm run start --workspace server
     healthCheckPath: /api/health
     disk:
@@ -16,5 +20,16 @@ services:
         value: production
       - key: LEARNSPHERE_DATA_DIR
         value: /var/data/learnsphere
+      # Public deployment: every API route except health/config/auth needs a
+      # signed-in account.
+      - key: AUTH_MODE
+        value: required
+      # Entered in the Render dashboard, never committed. Without it (or with a
+      # value shorter than the minimum length) no team account is created at
+      # startup and nobody can sign in.
+      - key: TEAM_BOOTSTRAP_PASSWORD
+        sync: false
+      # Optional: only needed for browser calls that arrive from another origin.
+      # The SPA served by this service is same-origin, so it is not required.
       - key: CORS_ALLOWED_ORIGINS
         sync: false
