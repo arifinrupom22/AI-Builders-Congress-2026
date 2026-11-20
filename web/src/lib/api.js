@@ -10,6 +10,8 @@
  * it exists to keep the UI code free of fetch/bookkeeping noise.
  */
 
+import { firebaseIdToken } from './firebase.js';
+
 const LEARNER_STORAGE_KEY = 'learnsphere.learnerId';
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '');
 export const DEFAULT_LEARNER_ID = 'local';
@@ -96,6 +98,11 @@ function buildQuery(params) {
  */
 async function request(path, { method = 'GET', body, signal, acceptStatuses = [] } = {}) {
   const headers = { 'X-Learner-Id': getLearnerId(), Accept: 'application/json' };
+  // With Firebase configured the ID token is the credential. The server
+  // verifies its signature and derives the account id from it; the header
+  // below is only a data-scoping hint for local mode.
+  const idToken = await firebaseIdToken().catch(() => null);
+  if (idToken) headers.Authorization = `Bearer ${idToken}`;
   if (!SAFE_METHODS.has(method)) {
     const token = csrfToken();
     if (token) headers['X-CSRF-Token'] = token;

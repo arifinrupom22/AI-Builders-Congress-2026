@@ -17,6 +17,7 @@
  */
 import crypto from 'node:crypto';
 import AppError from '../errors.js';
+import { publicUser } from '../auth/service.js';
 
 export const SESSION_COOKIE = 'ls_session';
 export const CSRF_COOKIE = 'ls_csrf';
@@ -107,13 +108,54 @@ function isSecureRequest(req) {
  * In local mode a missing cookie simply leaves the profile-scoped identity in
  * place; in required mode the guard below rejects the request.
  */
-export function attachSession({ config, authService }) {
+export function attachSession({ config, authService, store = null, firebase = null }) {
   const mode = config.auth?.mode ?? 'local';
   return async (req, res, next) => {
     try {
       const cookies = parseCookies(req.headers.cookie);
       const token = cookies[SESSION_COOKIE];
       req.auth = { mode, authenticated: false, user: null };
+
+      // --- Firebase ID token -------------------------------------------------
+      // A bearer token is checked before anything else. The uid is taken from
+      // the verified token only: a client cannot name the account it wants to
+      // be, and an unverified address never receives a working session.
+      const authorization = req.get('authorization');
+      if (firebase?.configured && typeof authorization === 'string' && authorization.startsWith('Bearer ')) {
+        const raw = authorization.slice('Bearer '.length).trim();
+        const claims = raw ? await firebase.verifyIdToken(raw) : null;
+        if (!claims) {
+          throw new AppError('Your session has expired. Sign in again.', {
+            status: 401,
+            code: 'invalid_token',
+            expose: true,
+          });
+        }
+        if (claims.emailVerified !== true) {
+          throw new AppError('Verify your email address before using LearnSphere AI. Check your inbox for the link.', {
+            status: 403,
+            code: 'email_not_verified',
+            expose: true,
+          });
+        }
+        const account = store?.upsertFirebaseUser ? await store.upsertFirebaseUser(claims) : null;
+        if (!account) {
+          throw new AppError('This account could not be loaded. Try signing in again.', {
+            status: 401,
+            code: 'account_unavailable',
+            expose: true,
+          });
+        }
+        req.auth = {
+          mode: 'required',
+          authenticated: true,
+          source: 'firebase',
+          user: publicUser(account),
+        };
+        req.learnerId = account.id;
+        res.setHeader('Cache-Control', 'no-store');
+        return next();
+      }
 
       if (token) {
         const session = await authService.sessionFromToken(token);
@@ -169,6 +211,9 @@ export function csrfGuard({ authService }) {
   return (req, res, next) => {
     if (SAFE.has(req.method)) return next();
     if (!req.auth?.authenticated) return next();
+    // A bearer-token request carries no ambient credential, so there is nothing
+    // for another origin to ride on: CSRF does not apply.
+    if (req.auth.source === 'firebase') return next();
     // Signing in/out must work before a CSRF token exists.
     const path = req.originalUrl || req.url || '';
     if (path.startsWith('/api/auth/')) return next();

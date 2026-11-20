@@ -17,7 +17,7 @@ export default defineConfig(({ command }) => {
   /**
    * The published bundle is always a production bundle, but a hosting
    * environment can export `NODE_ENV=development` and Vite honours it: the
-   * Netlify build did, and `vite build` then emitted React's *development*
+   * production build did, and `vite build` then emitted React's *development*
    * build - measured at 425.72 kB for the vendor chunk against 218.81 kB for
    * the same code built for production, plus slower rendering at runtime.
    * Pinning it here rather than in the host's settings keeps `npm run build`

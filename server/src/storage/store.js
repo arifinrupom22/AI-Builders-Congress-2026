@@ -57,33 +57,45 @@ export function sha256(buffer) {
 
 const nowIso = () => new Date().toISOString();
 
-export async function createStore({ dataDir, logger }) {
+export async function createStore({ dataDir, logger, adapters = null }) {
   const chunksDir = path.join(dataDir, 'chunks');
   const rawDir = path.join(dataDir, 'raw');
-  await fs.mkdir(chunksDir, { recursive: true });
-  await fs.mkdir(rawDir, { recursive: true });
+  // A database driver supplies its own collections and blob store; only the
+  // local JSON driver needs directories on disk.
+  if (!adapters) {
+    await fs.mkdir(chunksDir, { recursive: true });
+    await fs.mkdir(rawDir, { recursive: true });
+  }
+  const collection = (name, defaultValue) =>
+    adapters?.collections ? adapters.collections(name) : new JsonCollection(path.join(dataDir, `${name}.json`), defaultValue);
 
-  const materials = new JsonCollection(path.join(dataDir, 'materials.json'), []);
-  const sessions = new JsonCollection(path.join(dataDir, 'sessions.json'), []);
-  const quizzes = new JsonCollection(path.join(dataDir, 'quizzes.json'), []);
-  const attempts = new JsonCollection(path.join(dataDir, 'attempts.json'), []);
-  const decks = new JsonCollection(path.join(dataDir, 'flashcard-decks.json'), []);
-  const reviews = new JsonCollection(path.join(dataDir, 'flashcard-reviews.json'), []);
-  const visuals = new JsonCollection(path.join(dataDir, 'studio-visuals.json'), []);
-  const paths = new JsonCollection(path.join(dataDir, 'learning-paths.json'), []);
+  const materials = collection('materials', []);
+  const sessions = collection('sessions', []);
+  const quizzes = collection('quizzes', []);
+  const attempts = collection('attempts', []);
+  const decks = collection('flashcard-decks', []);
+  const reviews = collection('flashcard-reviews', []);
+  const visuals = collection('studio-visuals', []);
+  const paths = collection('learning-paths', []);
   // Accounts and their sessions. Sessions store only a SHA-256 digest of the
   // cookie token, so a copy of this file cannot be replayed as a login.
-  const users = new JsonCollection(path.join(dataDir, 'users.json'), []);
-  const authSessions = new JsonCollection(path.join(dataDir, 'auth-sessions.json'), []);
+  const users = collection('users', []);
+  const authSessions = collection('auth-sessions', []);
   // Single-use password-reset tokens. Only the digest is stored, and a token
   // is deleted as soon as it is used or when the password changes.
-  const passwordResets = new JsonCollection(path.join(dataDir, 'password-resets.json'), []);
-  const plans = new JsonCollection(path.join(dataDir, 'study-plans.json'), []);
+  const passwordResets = collection('password-resets', []);
+  const plans = collection('study-plans', []);
 
   // ---- passages ------------------------------------------------------------
+  // Passages and uploaded originals are the only large blobs in the system. A
+  // database driver can keep them in object storage; the default keeps them as
+  // files next to the JSON collections.
+  const blobs = adapters?.blobs ?? null;
+
   const chunkFile = (materialId) => path.join(chunksDir, `${assertSafeId(materialId, 'material id')}.json`);
 
   async function savePassages(materialId, passages) {
+    if (blobs) return blobs.savePassages(materialId, passages);
     const file = chunkFile(materialId);
     const tmp = `${file}.${process.pid}.tmp`;
     await fs.writeFile(tmp, JSON.stringify(passages), 'utf8');
@@ -91,6 +103,7 @@ export async function createStore({ dataDir, logger }) {
   }
 
   async function readPassages(materialId) {
+    if (blobs) return blobs.readPassages(materialId);
     try {
       return JSON.parse(await fs.readFile(chunkFile(materialId), 'utf8'));
     } catch {
@@ -99,6 +112,7 @@ export async function createStore({ dataDir, logger }) {
   }
 
   async function deletePassages(materialId) {
+    if (blobs) return blobs.deletePassages(materialId);
     await fs.rm(chunkFile(materialId), { force: true });
   }
 
@@ -109,16 +123,19 @@ export async function createStore({ dataDir, logger }) {
   }
 
   async function saveRaw(materialId, ext, buffer) {
+    if (blobs) return blobs.saveRaw(materialId, ext, buffer);
     const file = rawPath(materialId, ext);
     await fs.writeFile(file, buffer);
     return file;
   }
 
   async function readRaw(materialId, ext) {
+    if (blobs) return blobs.readRaw(materialId, ext);
     return fs.readFile(rawPath(materialId, ext));
   }
 
   async function deleteRaw(materialId, ext) {
+    if (blobs) return blobs.deleteRaw(materialId, ext);
     await fs.rm(rawPath(materialId, ext), { force: true });
   }
 
@@ -201,13 +218,78 @@ export async function createStore({ dataDir, logger }) {
       return record;
     },
 
+    /**
+     * Bind a verified Firebase identity to an account row.
+     *
+     * Lookup order matters for the five team accounts: an existing row is found
+     * by `firebaseUid` first, then by email, and keeps its own id. Keeping the
+     * id is what preserves that person's materials, quizzes and progress -
+     * only the sign-in provider changes. A brand-new account is keyed by the
+     * Firebase UID directly.
+     */
+    async upsertFirebaseUser({ uid, email, displayName, emailVerified = false }) {
+      if (typeof uid !== 'string' || uid.length === 0) throw AppError.badRequest('A verified Firebase uid is required.');
+      const emailKey = String(email ?? '').trim().toLowerCase();
+      let record = null;
+      await users.update((list) => {
+        let idx = list.findIndex((u) => u.firebaseUid === uid);
+        if (idx === -1 && emailKey) idx = list.findIndex((u) => u.emailKey === emailKey);
+        const stamp = nowIso();
+        if (idx === -1) {
+          record = {
+            id: uid,
+            firebaseUid: uid,
+            email: email ?? null,
+            emailKey: emailKey || null,
+            displayName: displayName || (email ? email.split('@')[0] : 'Learner'),
+            passwordHash: null,
+            authProvider: 'firebase',
+            emailVerified: emailVerified === true,
+            profile: {
+              language: 'auto',
+              level: null,
+              subjects: [],
+              examDate: null,
+              minutesPerDay: null,
+              daysPerWeek: null,
+            },
+            onboardingCompleted: false,
+            mustChangePassword: false,
+            createdAt: stamp,
+            updatedAt: stamp,
+          };
+          list.push(record);
+          return;
+        }
+        const next = {
+          ...list[idx],
+          firebaseUid: uid,
+          authProvider: 'firebase',
+          emailVerified: emailVerified === true,
+          updatedAt: stamp,
+        };
+        // Never overwrite an address or name the account already has: the
+        // token is the authority for the uid, not for the profile.
+        if (!next.email && email) next.email = email;
+        if (!next.emailKey && emailKey) next.emailKey = emailKey;
+        if (!next.displayName && displayName) next.displayName = displayName;
+        next.mustChangePassword = false;
+        list[idx] = next;
+        record = next;
+      });
+      return record;
+    },
+
     async findUserByEmailKey(emailKey) {
       const all = await users.read();
       return all.find((u) => u.emailKey === emailKey) ?? null;
     },
 
     async getUserById(id) {
-      if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id)) return null;
+      // Account ids are either a UUID (built-in password accounts) or a
+      // Firebase UID (alphanumeric, 28 characters). Both are opaque server-side
+      // values; neither is ever taken from a request body.
+      if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(id)) return null;
       const all = await users.read();
       return all.find((u) => u.id === id) ?? null;
     },

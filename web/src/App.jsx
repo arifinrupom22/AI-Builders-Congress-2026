@@ -92,7 +92,7 @@ class ErrorBoundary extends Component {
 
 const CONFIG_ERROR_CODES = ['backend_not_configured', 'invalid_backend_url'];
 // Codes only an API proxy produces. Seeing one means a hosted deployment is in
-// the path, even on localhost (Netlify Dev, or the proxy run by hand).
+// the path, even on localhost (a dev proxy, or the Vite proxy run by hand).
 const PROXY_ERROR_CODES = [...CONFIG_ERROR_CODES, 'backend_timeout', 'backend_unavailable'];
 
 function Runtime() {
@@ -220,7 +220,7 @@ function Runtime() {
             {!hosted
               ? 'LearnSphere AI needs its local Express backend for retrieval, uploads and progress.'
               : isConfigProblem
-                ? 'The web app is published, but its API function has no usable backend address.'
+                ? 'The web app is published, but it cannot reach its API.'
                 : 'The request reached the API but it did not answer. A free-tier server can sleep when idle and needs a moment to start.'}
           </p>
           <Alert tone="warning" title={hosted ? (isConfigProblem ? 'Finish the API deployment' : 'Try again') : 'Start the backend, then reload'}>
@@ -235,15 +235,13 @@ function Runtime() {
             ) : isConfigProblem ? (
               <>
                 <p>
-                  Deploy the backend from <code className="md-code">render.yaml</code>, then in Netlify open{' '}
-                  <strong>Project configuration → Environment variables</strong> and set{' '}
-                  <code className="md-code">LEARNSPHERE_BACKEND_URL</code> to the backend URL. Its scope must
-                  include <strong>Functions</strong>, and a new deploy is needed for the change to apply.
+                  This build expects its API on the same origin. Deploy the service from{' '}
+                  <code className="md-code">render.yaml</code>, which builds the web app and serves it next
+                  to <code className="md-code">/api/*</code>, then reload this page.
                 </p>
                 <p className="muted-xs">
-                  The API function ships with this project's own backend as its default, so this message
-                  normally means the whole function was not deployed. Deploy from the repository or the
-                  Netlify CLI; uploading only the built static folder omits server-side functions.
+                  If the SPA was uploaded on its own (a folder-only static deploy), the API is not part of
+                  it: publish the whole service instead.
                 </p>
                 {bootError?.message ? <p className="muted-xs">{bootError.message}</p> : null}
               </>

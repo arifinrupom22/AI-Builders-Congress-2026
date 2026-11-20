@@ -166,7 +166,10 @@ function SignupForm({ next }) {
     setBusy(true);
     setError(null);
     try {
-      await registerAccount(email.trim(), password, displayName.trim() || undefined);
+      const result = await registerAccount(email.trim(), password, displayName.trim() || undefined);
+      // A Firebase sign-up has no session yet: the email must be verified
+      // first, so the form stays put and the toast explains the next step.
+      if (result?.needsVerification) return;
       navigate(next ?? '/onboarding');
     } catch (err) {
       setError(err);
@@ -286,6 +289,13 @@ function ResetForm() {
     setRequesting(true);
     setError(null);
     try {
+      if (config?.auth?.provider === 'firebase') {
+        const { firebaseSendPasswordReset } = await import('../lib/firebase.js');
+        await firebaseSendPasswordReset(email.trim());
+        setMessage(t('reset.sent'));
+        setDone(true);
+        return;
+      }
       const result = await api.requestPasswordReset(email.trim());
       setMessage(result.message ?? t('reset.sent'));
       if (result.devToken) {

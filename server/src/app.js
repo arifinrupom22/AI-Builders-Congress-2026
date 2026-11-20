@@ -15,6 +15,7 @@ import { corsGuard, securityHeaders, buildAllowedOrigins } from './middleware/se
 import { createUploadMiddleware } from './middleware/uploads.js';
 import { attachSession, csrfGuard, requireAuthentication, requirePasswordChange } from './middleware/auth.js';
 import { createAuthService } from './auth/service.js';
+import { createFirebaseVerifier } from './auth/firebase.js';
 import { authRouter } from './routes/auth.js';
 
 import { materialsRouter } from './routes/materials.js';
@@ -41,7 +42,10 @@ const SPA_CSP = [
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "img-src 'self' data:",
   "font-src 'self' https://fonts.gstatic.com",
-  "connect-src 'self'",
+  // Firebase Authentication and Supabase are the only cross-origin calls the
+  // app itself makes. Anything else (a provider key, an arbitrary host) stays
+  // blocked.
+  "connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com https://*.firebaseapp.com https://*.supabase.co https://*.supabase.in",
   "object-src 'none'",
   "base-uri 'none'",
   "form-action 'self'",
@@ -79,9 +83,12 @@ export function createApp({
   app.use(express.json({ limit: config.limits.jsonBodyLimit }));
 
   const authService = createAuthService({ store, config });
+  // Verifies Firebase ID tokens with Google's published certificates. When no
+  // project id is configured this is inert and the password routes are used.
+  const firebase = createFirebaseVerifier({ projectId: config.firebase?.projectId ?? '' });
   // Resolves an account from its session cookie before anything is limited or
   // read, so both rate limiting and storage use a server-verified identity.
-  app.use(attachSession({ config, authService }));
+  app.use(attachSession({ config, authService, store, firebase }));
 
   // Authentication is the one API group that must be reachable while signed out.
   app.use('/api/auth', authRouter({ config, authService }));

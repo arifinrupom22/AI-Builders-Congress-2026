@@ -7,11 +7,11 @@
 <p align="center"><strong>Study from your own material, with a tutor that cites its sources.</strong></p>
 
 <p align="center">
-  <a href="https://ai-builders-congress-2026.netlify.app/"><img alt="Live demo" src="https://img.shields.io/badge/live_demo-open-2ea44f?style=flat-square" /></a>
+  <a href="https://ai-builders-congress-2026.onrender.com/"><img alt="Live demo" src="https://img.shields.io/badge/live_demo-open-2ea44f?style=flat-square" /></a>
   <a href="https://ai-builders-congress-2026.onrender.com/api/health"><img alt="API" src="https://img.shields.io/badge/API-health-46a2f1?style=flat-square" /></a>
   <img alt="Node" src="https://img.shields.io/badge/node-%E2%89%A520.11-339933?style=flat-square&logo=node.js&logoColor=white" />
   <img alt="React" src="https://img.shields.io/badge/react-19-61dafb?style=flat-square&logo=react&logoColor=black" />
-  <img alt="Tests" src="https://img.shields.io/badge/tests-321_passing-2ea44f?style=flat-square" />
+  <img alt="Tests" src="https://img.shields.io/badge/tests-325_passing-2ea44f?style=flat-square" />
   <img alt="License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" />
 </p>
 
@@ -25,13 +25,14 @@
 
 | What | URL |
 | --- | --- |
-| **Web app** | https://ai-builders-congress-2026.netlify.app/ |
+| **Web app** | https://ai-builders-congress-2026.onrender.com/ |
 | **API** | https://ai-builders-congress-2026.onrender.com |
 | **Health check** | https://ai-builders-congress-2026.onrender.com/api/health |
 
-> The API runs on a free Render instance, so the first request after a quiet period can take
-> up to ~30 seconds while it wakes. The SPA and API are separate services; the site proxies
-> `/api/*` to Render through a Netlify Function.
+> One Render service serves the React app and the API on the same origin, so there is no
+> cross-origin proxy in the path. It runs on a free instance: the first request after a quiet
+> period can take up to ~30 seconds while it wakes, and a request that arrives before the
+> instance is awake fails with a retryable timeout.
 
 ## The short version
 
@@ -57,6 +58,7 @@ instead of inventing a citation.
 - [Quick start](#quick-start)
 - [Project structure](#project-structure)
 - [Configuration](#configuration)
+- [Firebase and Supabase setup](#firebase-setup)
 - [Accounts and security](#accounts-and-security)
 - [Data and backups](#data-and-backups)
 - [API](#api)
@@ -91,7 +93,7 @@ instead of inventing a citation.
 ┌────────────────────────────┐
 │  React SPA (Vite)          │  routes, chat, quiz player, plan editor
 └─────────────┬──────────────┘
-              │  /api/*   (same origin; Netlify Function proxies to Render)
+              │  /api/*   (same origin)
 ┌─────────────▼──────────────┐
 │  Express 5 API             │  auth, rate limits, CSRF, validation (Zod)
 ├────────────────────────────┤
@@ -102,7 +104,7 @@ instead of inventing a citation.
 └─────────────┬──────────────┘
               │
 ┌─────────────▼──────────────┐
-│  Storage                   │  JSON collections + uploaded files + extracted passages
+│  Storage                   │  Supabase (Postgres + Storage) or local JSON collections
 └────────────────────────────┘
 ```
 
@@ -114,8 +116,9 @@ instead of inventing a citation.
 | Documents | `pdfjs-dist`, in-house DOCX/ODT/RTF/legacy-DOC readers |
 | Validation | Zod schemas on every mutating endpoint |
 | AI | Groq / Gemini / OpenRouter / Mistral / Cloudflare, with a local fallback |
-| Auth | scrypt password hashes, HttpOnly session cookies, session-bound CSRF token |
-| Hosting | Netlify (SPA + function proxy) and Render (API + persistent disk) |
+| Auth | Firebase Authentication (email/password, email verification); ID tokens verified server-side |
+| Data | Supabase PostgreSQL + private object storage (JSON files for local development) |
+| Hosting | Render (SPA + API on one origin) |
 
 ### How answers stay grounded
 
@@ -224,11 +227,12 @@ learnsphere-ai/
 │   ├── src/pages/           dashboard, chat, materials, quiz, plan, settings…
 │   ├── src/components/      shell, brand, shared UI
 │   └── src/styles/          public and app themes
-├── netlify/functions/       same-origin `/api/*` proxy
 ├── scripts/                 dev runner, sample generator, team password reset
 ├── samples/                 generated demo material (8 formats)
-├── render.yaml              API deployment (Render)
-└── netlify.toml             SPA deployment (Netlify)
+├── supabase/migrations/    PostgreSQL schema, indexes and RLS
+├── server/src/auth/firebase.js  Firebase ID-token verification
+├── server/src/storage/supabase.js  Supabase adapters (records, passages, Storage)
+└── render.yaml              web app + API deployment (Render)
 ```
 
 ## Configuration
@@ -245,7 +249,11 @@ The full annotated list is in [`.env.example`](.env.example).
 | `AUTH_RESET_TTL_MINUTES` | `30` | password-reset token lifetime |
 | `AUTH_DEV_RESET` | on outside production | return the one-time reset token to the page; `0` disables |
 | `AUTH_REGISTRATION_POLICY` | `allowlist` | `allowlist` (five team addresses) or `open` |
-| `TEAM_BOOTSTRAP_PASSWORD` | — | shared password for the five authorised accounts |
+| `TEAM_BOOTSTRAP_PASSWORD` | — | shared password for the five authorised accounts (only while they use the built-in password store) |
+| `FIREBASE_PROJECT_ID` | — | enables Firebase ID-token verification; the provider becomes Firebase |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | — | enables the Supabase data store (server-side only) |
+| `SUPABASE_STORAGE_BUCKET` | `materials` | private bucket for uploaded originals |
+| `VITE_FIREBASE_*` | — | build-time Firebase web config (public) |
 | `TRUST_PROXY` | `0` | reverse-proxy hops to trust for `req.ip` |
 | `CORS_ALLOWED_ORIGINS` | — | comma-separated origins allowed to call the API |
 | `LEARNSPHERE_DATA_DIR` | `server/data` | storage directory |
@@ -259,63 +267,173 @@ The full annotated list is in [`.env.example`](.env.example).
 
 ## Accounts and security
 
-Two identity modes, chosen with `AUTH_MODE`:
+Identity has two layers, and they are deliberately separate:
+
+| Layer | Owner | What it proves |
+| --- | --- | --- |
+| **Firebase Authentication** | Firebase | who the person is (email verified, ID token signed by Firebase) |
+| **Application data** | this server + Supabase | which rows that person may read or write |
+
+Supabase Auth is **not** used anywhere. Firebase is the only identity provider.
+
+### Identity modes
+
+`AUTH_MODE` still selects what the deployment expects:
 
 | Mode | Intended use | Identity |
 | --- | --- | --- |
 | `local` (development default) | one student on one machine, demo, judging | a browser-asserted study profile (`X-Learner-Id`) |
-| `required` (production default) | any public or shared deployment | a server-verified account session |
+| `required` (production default) | any public or shared deployment | a verified Firebase ID token, or a legacy session cookie |
 
-**`local` is not authentication.** The profile id is sanitised and every store query filters on
-it, but anyone who can reach the API can send any profile id. Settings and `/api/health` say this
+**`local` is not authentication.** The profile id is sanitised and every store query filters on it,
+but anyone who can reach the API can send any profile id. Settings and `/api/health` say this
 explicitly, and the server logs a warning at startup.
 
-In `required` mode:
+### Firebase Authentication
 
-- Registration and sign-in live at `/api/auth/*`. Passwords are hashed with **scrypt** and a
-  per-user random salt (minimum 10 characters).
-- The session is a random 32-byte token in an **HttpOnly, SameSite=Lax** cookie. Only a SHA-256
-  digest of the token is stored, so a copy of the data directory cannot be replayed as a login.
+When `FIREBASE_PROJECT_ID` is set on the server and the `VITE_FIREBASE_*` web config is present at
+build time, accounts are created and signed in through Firebase:
+
+- **Create account** — the existing sign-up form calls Firebase Email/Password, sets the display
+  name, and sends a verification link. The new account is then signed out immediately, so an
+  unverified account never holds a session.
+- **Email verification** — the server refuses an unverified token with `403 email_not_verified`.
+  The UI shows "verify your email, then sign in" instead of a half-working account.
+- **Login** — Firebase authenticates, the browser sends the ID token as
+  `Authorization: Bearer <idToken>`, and the server verifies it before touching any data.
+- **Logout** — Firebase clears its session and the server also drops any legacy cookie session.
+- **Password reset** — the existing Forgot-password form calls Firebase's reset email when
+  Firebase is configured. No reset token is ever shown on the page in that mode.
+
+Server-side verification (`server/src/auth/firebase.js`) is dependency-free: it pins `alg` to
+RS256, selects Google's published certificate by `kid`, verifies the signature, checks `aud`,
+`iss`, `exp`, `iat` and a non-empty `sub`, and only then treats the token as an identity. A token
+that fails any check is rejected with `401 invalid_token` — the server never falls back to a
+client-supplied uid.
+
+The account row is created on the first verified request and keyed by the Firebase UID. A later
+sign-in updates only `emailVerified` and the display name, so the account id — and therefore every
+row it owns — stays stable.
+
+### The five team accounts
+
+The five allowlisted addresses are preserved:
+
+1. `arifinrupom30@gmail.com`
+2. `sneharahman634@gmail.com`
+3. `nabilanawshin12@gmail.com`
+4. `sbipro89@gmail.com`
+5. `muhammadabirali@gmail.com`
+
+They can be moved to Firebase in one of two supported ways. No password is invented and no hash is
+copied: Firebase cannot import scrypt hashes.
+
+- **Recommended — password-reset migration.** Create the same five addresses in Firebase
+  (Authentication → Users → Add user, or let each person sign up), then have each person complete
+  "Forgot password". Their existing data is kept: the first verified Firebase token is matched to
+  the existing account row by email, and the row keeps its original id, so materials, quizzes,
+  plans and progress are all still there.
+- **Interim — legacy accounts.** Until an address exists in Firebase, the server-side password
+  accounts keep working exactly as before (scrypt hashes, HttpOnly session cookie). Sign-in code
+  prefers Firebase when it is configured and falls back to the password route when it is not.
+
+`TEAM_BOOTSTRAP_PASSWORD` still provisions the five accounts on a deployment that has not moved to
+Firebase. `npm run team:set-password` updates them in place.
+
+### Sessions, CSRF and route protection
+
+- Firebase requests are bearer-token requests: no ambient cookie, so no CSRF token is required —
+  and the server ignores the CSRF header for them.
+- Legacy password sessions remain a random 32-byte token in an **HttpOnly, SameSite=Lax** cookie;
+  only its SHA-256 digest is stored. State-changing cookie requests must echo the session-bound
+  CSRF token (`ls_csrf` → `X-CSRF-Token`), otherwise `403 csrf_failed`.
 - Every API route except `/api/health`, `/api/config` and `/api/auth/*` answers **401** without a
-  session, and the account id — not any request header — decides whose rows are read or written.
-- Signing out deletes the session server-side and clears the cookie. Signing in rotates the
-  session: the pre-login token stops working immediately.
-- State-changing requests must echo the session-bound CSRF token (`ls_csrf` cookie →
-  `X-CSRF-Token` header). Requests without it answer `403 csrf_failed`.
+  verified identity. The account id comes from the verified token or the session record — never
+  from a request header or body.
 - The frontend is route-driven: `/` is a public welcome page, `/login`, `/signup` and `/reset` are
   real forms, `/onboarding` is shown once to a new account, and any other route redirects a
   signed-out visitor to `/login?next=<path>`.
 - `/api/account` exposes the profile, a JSON export of the caller's own data, and deletion.
-  Export never contains a password hash; deletion requires the account password and removes every
-  owned row and file.
-- Password reset is a single-use, hashed, 30-minute token. **No email provider is bundled**, so on
-  non-production deployments the token is returned to the page (labelled as a development token;
-  `AUTH_DEV_RESET=0` disables it). Production must configure delivery.
+  Export never contains a password hash; deletion removes every owned row and file.
 
-### Authorised accounts
+### Secrets
 
-This deployment is invitation-only. Five team addresses may hold an account, and the list lives
-on the server (`server/src/auth/team.js`) — it is never sent to the browser, so a visitor cannot
-enumerate who has access.
+| Value | Where it lives | Never |
+| --- | --- | --- |
+| `VITE_FIREBASE_*` | build-time web config (public by design) | — |
+| `FIREBASE_PROJECT_ID` / `FIREBASE_CLIENT_EMAIL` / `FIREBASE_PRIVATE_KEY` | server environment | browser, repository |
+| `SUPABASE_URL` | server environment | — (public, but only used server-side) |
+| `SUPABASE_SERVICE_ROLE_KEY` | server environment | browser, repository, logs |
 
-- `AUTH_REGISTRATION_POLICY=allowlist` (default) accepts a sign-up only for those addresses and
-  registers the person under their team name. `open` accepts any address.
-- The shared team password is configuration, not source: it is read from
-  `TEAM_BOOTSTRAP_PASSWORD` in `.env` (git-ignored) with no built-in fallback. Quote it if it
-  contains `#`.
-- `npm run team:set-password` updates the five accounts **in place** (same ids, profile, materials,
-  progress, plans and sessions), gives each its own scrypt hash, and clears `mustChangePassword`.
-- Provisioning at startup is non-destructive: it creates missing accounts and never touches an
-  existing one. The first-login gate (`403 password_change_required`) applies to accounts flagged
-  `mustChangePassword`; `POST /api/account/password` verifies the current password, clears the
-  flag and revokes every session.
-
-Local-mode data is **not** silently migrated into an account; the two are separate learners by
-design.
-
+The service-role key bypasses Row Level Security, so it exists only in the server process. The
+frontend never receives it, and a test asserts that no configured secret appears in `web/dist`.
 ## Data and backups
 
-All state lives under `LEARNSPHERE_DATA_DIR` (default `server/data/`, ignored by Git):
+Application data has one driver, chosen at startup by `server/src/storage/index.js`:
+
+| Configuration | Driver | Use |
+| --- | --- | --- |
+| `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` set | **Supabase** (PostgreSQL + Storage) | production, shared deployments |
+| otherwise | JSON collections under `LEARNSPHERE_DATA_DIR` | local development, tests, offline demo |
+
+A configured-but-unreachable Supabase stops the server at startup instead of silently writing to
+local disk, so a deployment can never end up with half its data in a different store.
+
+### Supabase schema
+
+`supabase/migrations/0001_init.sql` creates everything, and is safe to re-run.
+
+| Object | Purpose |
+| --- | --- |
+| `records(collection, id, owner_id, data jsonb, created_at, updated_at)` | every application entity, one row each. `collection` names the type: `users`, `materials`, `sessions`, `quizzes`, `attempts`, `flashcard-decks`, `flashcard-reviews`, `studio-visuals`, `learning-paths`, `study-plans`, `auth-sessions`, `password-resets`. `owner_id` is the account id (the Firebase UID for Firebase accounts); account rows have no owner. |
+| `material_passages(material_id, position, data jsonb)` | extracted, citable passages per uploaded document, read by material in page order |
+| `profiles` (view) | account rows flattened for reporting: user id, Firebase UID, email, display name, provider |
+| storage bucket `materials` | the uploaded originals, private, 20 MB per file |
+
+Indexes cover the access paths the API actually uses: by collection, by owner, by collection +
+owner, by `updated_at`, plus a GIN index on `data` and **unique** indexes on the Firebase UID and on
+the lower-cased `emailKey`, so two accounts can never claim one identity or one address.
+
+`data` holds the entity exactly as the API produces it. That is a deliberate choice: the tested
+learning logic (retrieval, quizzes, flashcards, planning, progress) is unchanged, so its behaviour
+cannot drift when the database changes, and a schema migration can normalise fields later without
+touching a single feature.
+
+The server implements this through two small adapters (`server/src/storage/supabase.js`): a
+collection with `read()` / `update(mutator)` over `records`, and blob storage over
+`material_passages` + the private bucket. The rest of the store — every ownership filter, every
+"does this row belong to this learner" check — is the same code that runs against local files.
+
+### User isolation and RLS
+
+- Every store query is filtered by the identity resolved from the verified ID token (or the legacy
+  session). A caller cannot pass another account's id: the server derives it, it is never an input.
+- Row Level Security is **enabled** on `records` and `material_passages`, and `anon` /
+  `authenticated` are revoked, so a leaked anon key reads nothing.
+- The service-role key bypasses RLS by design. That is why the API checks ownership itself instead
+  of assuming the database will. The migration also ships owner policies keyed on a
+  `firebase_uid` JWT claim for a deployment that later puts a JWT-bridging proxy in front of
+  Postgres; they never widen access for an anonymous request.
+- Uploaded files are in a **private** bucket. They are only read through the API, after the same
+  ownership check, and never exposed as a public URL.
+
+### Migrating existing data
+
+Nothing is moved automatically. The JSON collections and the Supabase tables are separate drivers,
+and a deployment uses exactly one of them. To carry existing files into Supabase:
+
+1. Apply the migration: `supabase db push` (or paste the SQL into the dashboard).
+2. For each collection file in `LEARNSPHERE_DATA_DIR` (`materials.json`, `sessions.json`, …, `users.json`),
+   insert rows with `collection` set to the file name without `.json` and `owner_id` set to the
+   row's `learnerId` (`users`, `auth-sessions`, `password-resets` have no owner).
+3. Upload each file in `raw/` to the `materials` bucket under the material id.
+4. Insert each `chunks/<material-id>.json` array into `material_passages` with `position` as the
+   array index.
+
+The five team accounts migrate the same way: their `users` row keeps its id, and a Firebase account
+that verifies the same email is attached to it, so materials, quizzes and progress survive.
+
+### Local JSON layout (development driver)
 
 - JSON collections: `materials`, `sessions`, `quizzes`, `attempts`, `flashcard-decks`,
   `flashcard-reviews`, `studio-visuals`, `learning-paths`, `study-plans`, `users`,
@@ -324,10 +442,9 @@ All state lives under `LEARNSPHERE_DATA_DIR` (default `server/data/`, ignored by
 - `chunks/` — extracted passages per material
 
 Writes are serialised per file and committed with a temp file + rename, so a crash cannot leave
-truncated JSON (`server/test/storage.queue.test.js` covers it). `render.yaml` mounts a persistent
-disk at `/var/data`; without one, uploads are lost when the service restarts. Back up by copying
-that directory while the service is stopped. A single instance is supported; multiple instances
-would need shared storage and a shared rate-limit store.
+truncated JSON (`server/test/storage.queue.test.js` covers it). Back up by copying that directory
+while the service is stopped. A single instance is supported; multiple instances would need shared
+storage and a shared rate-limit store.
 
 ## API
 
@@ -368,53 +485,91 @@ npm run build      # production bundle
 
 `npm test` boots the real Express app against a temporary data directory (no mocks) and covers
 retrieval, grounding, uploads, quizzes, flashcards, the review queue, DNA, coach, study plans,
-account isolation, rate limiting, CORS, secret handling and the Netlify proxy contract.
+account isolation, Firebase token verification, rate limiting, CORS and secret handling.
 `npm run build` is also required before the "no key in the bundle" test can inspect `web/dist`.
 
 ## Deployment
 
-The Express server serves the API and the built SPA, so a single Render service is the primary
-deployment:
+The Express server serves the API and the built SPA on **one origin**, so a single Render service is
+the whole deployment:
 
 | Service | URL | Serves |
 | --- | --- | --- |
-| Render (primary) | https://ai-builders-congress-2026.onrender.com | SPA + `/api/*` on one origin |
-| Netlify (optional mirror) | https://ai-builders-congress-2026.netlify.app/ | prebuilt SPA + `/api/*` proxy |
+| Render | https://ai-builders-congress-2026.onrender.com | SPA + `/api/*` on one origin |
+| Health check | https://ai-builders-congress-2026.onrender.com/api/health | provider chain, auth mode, store counts |
 
-1. **Render** — `render.yaml` runs `npm ci --include=dev && npm run build`, starts
-   `npm run start --workspace server`, health-checks `/api/health`, and mounts the persistent disk
-   described above. `--include=dev` is required: `NODE_ENV=production` is set for the build step
-   too, so npm would otherwise skip the devDependencies that Vite needs. The build writes
-   `web/dist`, which `server/src/app.js` serves, and `/api/*` is routed before the SPA fallback so
-   an API path can never be answered with `index.html`.
-2. **Netlify (optional)** — build with `npm run build`, publish `web/dist`, and route `/api/*`
-   through `netlify/functions/api.mjs` to the backend. The proxy forwards multiple `Set-Cookie`
-   headers, so account sessions work through it, gives the upstream 9 seconds
-   (`LEARNSPHERE_PROXY_TIMEOUT_MS`, capped below Netlify's 10-second limit), and returns a
-   retryable `backend_timeout` after that.
+`render.yaml` runs `npm ci --include=dev && npm run build`, starts
+`npm run start --workspace server`, health-checks `/api/health`, and mounts the persistent disk
+described above. `--include=dev` is required: `NODE_ENV=production` is set for the build step too,
+so npm would otherwise skip the devDependencies that Vite needs. The build writes `web/dist`, which
+`server/src/app.js` serves, and `/api/*` is routed before the SPA fallback so an API path can never
+be answered with `index.html`.
 
 ### Render environment variables
 
 | Key | Value | Notes |
 | --- | --- | --- |
 | `NODE_ENV` | `production` | Set in `render.yaml`. Also selects `AUTH_MODE=required` as the default. |
-| `LEARNSPHERE_DATA_DIR` | `/var/data/learnsphere` | Set in `render.yaml`; must stay on the mounted disk or uploads and accounts vanish on redeploy. |
-| `AUTH_MODE` | `required` | Set in `render.yaml`; every API route except health, config and auth needs a session. |
-| `TEAM_BOOTSTRAP_PASSWORD` | the team password | **Must be entered in the Render dashboard** (`sync: false`, never committed). At startup the five allowlisted accounts are created only if this is present and long enough; a service that started without it needs a restart after the value is added. Existing accounts are never touched or reset. |
-| `CORS_ALLOWED_ORIGINS` | e.g. `https://<site>` | Optional now that the SPA is same-origin; keep it only for browser clients on another origin. |
+| `LEARNSPHERE_DATA_DIR` | `/var/data/learnsphere` | Only used by the local JSON driver. With Supabase configured it is not read. |
+| `AUTH_MODE` | `required` | Set in `render.yaml`; every API route except health, config and auth needs a verified identity. |
+| `FIREBASE_PROJECT_ID` | e.g. `learnsphere-ai` | Enables Firebase ID-token verification. |
+| `FIREBASE_CLIENT_EMAIL` | service-account email | Optional for token verification (the certificate is fetched from Google); required if you later use the Admin SDK. |
+| `FIREBASE_PRIVATE_KEY` | service-account private key | Server-side only. Keep the `\n` escapes and wrap the value in double quotes. |
+| `SUPABASE_URL` | `https://<project>.supabase.co` | Enables the Supabase driver. |
+| `SUPABASE_SERVICE_ROLE_KEY` | service-role key | **Server-side only.** Never put it in a `VITE_` variable. |
+| `SUPABASE_STORAGE_BUCKET` | `materials` | Optional; defaults to `materials`. |
+| `TEAM_BOOTSTRAP_PASSWORD` | the team password | Only needed while the five accounts still use the built-in password store. |
+| `CORS_ALLOWED_ORIGINS` | e.g. `https://<site>` | Optional now that the SPA is same-origin. |
 | `LEARNSPHERE_AI_PROVIDER`, `LEARNSPHERE_AI_API_KEY`, `LEARNSPHERE_AI_MODEL` | `groq`, the key, `openai/gpt-oss-20b` | Optional; without them the app runs in local demo mode. |
 
-Set `LEARNSPHERE_BACKEND_URL` in Netlify (scope: **Functions**) when the backend is not the
-default. A folder-only static deploy does not include functions; deploy the repository.
+Frontend Firebase values are **build-time** variables and must exist when `npm run build` runs:
+`VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`,
+`VITE_FIREBASE_STORAGE_BUCKET`, `VITE_FIREBASE_MESSAGING_SENDER_ID`, `VITE_FIREBASE_APP_ID`. They are
+public by design; a build without them keeps the built-in password sign-in and never loads the
+Firebase SDK.
 
-**For any public deployment:** set `AUTH_MODE=required`, set `CORS_ALLOWED_ORIGINS` to the site's
-exact origin, keep `TRUST_PROXY=0` unless a known proxy is in front, and give the service a
-persistent disk. `netlify.toml` deliberately keeps the secrets scanner enabled for
-`LEARNSPHERE_AI_API_KEY`.
+**For any public deployment:** set `AUTH_MODE=required`, keep `TRUST_PROXY=0` unless a known proxy
+is in front, and give the service a persistent disk when using the JSON driver.
 
-Long AI generations can exceed the proxy's 9-second budget; the failure is a clear, retryable
-`backend_timeout`. Retrying is safe because the API writes nothing (quiz, attempt, message) until
-a request succeeds.
+### Firebase setup
+
+1. Create a project at <https://console.firebase.google.com>.
+2. **Authentication → Sign-in method → Email/Password → Enable.** Firebase sends the verification
+   and reset emails itself; no mail provider is needed in this app.
+3. **Project settings → Your apps → Web app** — register the app and copy the `firebaseConfig`
+   values into the `VITE_FIREBASE_*` variables above.
+4. **Authentication → Settings → Authorized domains** — add the Render host
+   (`ai-builders-congress-2026.onrender.com`) and `localhost` for development.
+5. **Authentication → Templates** — review the verification and password-reset wording and sender.
+6. **Project settings → Service accounts → Generate new private key** — copy `project_id` to
+   `FIREBASE_PROJECT_ID` and keep the JSON file out of the repository.
+7. Create or import the five team addresses under **Authentication → Users**, then have each person
+   use "Forgot password" (see [Authorised accounts](#the-five-team-accounts)).
+
+### Supabase setup
+
+1. Create a project at <https://supabase.com>.
+2. **SQL Editor** — paste `supabase/migrations/0001_init.sql` and run it (or `supabase db push` with
+   the Supabase CLI). It is idempotent.
+3. Confirm the objects exist: `records`, `material_passages`, the `profiles` view, and the private
+   `materials` storage bucket.
+4. Confirm RLS: both tables show **RLS enabled** and no policy grants `anon` access.
+5. **Project settings → API** — copy the project URL to `SUPABASE_URL` and the **service_role** key to
+   `SUPABASE_SERVICE_ROLE_KEY` (Render → Environment). Do not use the anon key here.
+6. Restart the service. The startup log prints `Supabase storage connected`; a bad URL or key stops
+   startup with an explicit message instead of writing to local disk.
+
+### Verifying a deployment
+
+1. `GET /api/health` → `200` with `environment: production`, the provider chain and store counts.
+2. `GET /` → `200 text/html`; the referenced `/assets/*.js` and `.css` return `200`.
+3. Create an account → the verification email arrives → the link verifies it → signing in before
+   verifying returns `403 email_not_verified`.
+4. Sign in verified, upload a document, ask a question, refresh the page: the material and the chat
+   are still there.
+5. Sign out and sign in again: the same data is still there (this is what proves persistence).
+6. Sign in as a second account: the first account's library is not visible.
+7. With the service-role key set, search `web/dist` for its value: it must not appear.
 
 ## Privacy
 
@@ -452,8 +607,7 @@ Stated plainly so nobody plans around a feature that is not there:
   check a live source" caveat instead of a guess; real-time grounding needs a search API key and
   is not wired in this build.
 - **No offline/PWA mode and no voice input/output.**
-- **No asynchronous AI job queue.** Requests are synchronous, bounded by the provider timeout and,
-  behind the Netlify proxy, by the 9-second upstream budget.
+- **No asynchronous AI job queue.** Requests are synchronous, bounded by the provider timeout.
 - **Interface translation is partial.** Welcome, sign-in, sign-up, reset, onboarding, the
   navigation shell, appearance/language controls and account settings are translated between
   English and Bangla. Deep tool screens (quiz player, studio, plan editor) still use English

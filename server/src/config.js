@@ -255,6 +255,36 @@ if (trustProxyRaw !== '0' && !Number.isFinite(parsedTrustProxy)) {
   rejected.push(`TRUST_PROXY=${trustProxyRaw} (not a hop count) - using 0`);
 }
 
+/**
+ * Firebase identity. Only the project id is needed to verify an ID token: the
+ * signing certificates are fetched from Google and cached. The service-account
+ * fields are kept for completeness and are never sent to the browser.
+ */
+const firebase = Object.freeze({
+  projectId: str('FIREBASE_PROJECT_ID'),
+  clientEmail: str('FIREBASE_CLIENT_EMAIL'),
+  privateKey: str('FIREBASE_PRIVATE_KEY').replace(/\\n/g, '\n'),
+  configured: Boolean(str('FIREBASE_PROJECT_ID')),
+});
+
+/**
+ * Supabase data store. Both values must be present; a half-configured pair is
+ * treated as "not configured" and reported in the startup warnings so a typo
+ * cannot silently keep writing to local disk.
+ */
+const supabaseUrl = str('SUPABASE_URL');
+const supabaseKey = str('SUPABASE_SERVICE_ROLE_KEY');
+const supabaseConfigured = Boolean(supabaseUrl && supabaseKey);
+if ((supabaseUrl && !supabaseKey) || (!supabaseUrl && supabaseKey)) {
+  rejected.push('SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY (only one of the pair is set) - using the local JSON store');
+}
+const supabase = Object.freeze({
+  url: supabaseUrl,
+  serviceRoleKey: supabaseKey,
+  storageBucket: str('SUPABASE_STORAGE_BUCKET') || 'materials',
+  configured: supabaseConfigured,
+});
+
 export const config = Object.freeze({
   version: '0.1.0',
   env: envName,
@@ -330,6 +360,8 @@ export const config = Object.freeze({
   },
 
   ai,
+  firebase,
+  supabase,
 
   /** Environment variables that were set but rejected, with the value used instead. */
   warnings: rejected,
@@ -379,6 +411,13 @@ export const config = Object.freeze({
         // decide between "sign in" and the profile switcher, and must never
         // present a profile id as an account.
         accounts: this.auth.mode !== 'local',
+        // Which provider signs people in: Firebase when the server can verify
+        // its tokens, otherwise the built-in password accounts (local demo and
+        // any account not yet migrated).
+        provider: this.firebase.configured ? 'firebase' : 'password',
+        firebaseConfigured: this.firebase.configured,
+        // Where application data lives. The UI only uses this for diagnostics.
+        store: this.supabase.configured ? 'supabase' : 'json',
         // The allowlist itself is never exposed; only the fact that sign-up is
         // invitation-only, so the form can say so before a request is made.
         registrationPolicy: this.auth.registrationPolicy,

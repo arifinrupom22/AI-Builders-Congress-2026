@@ -7,7 +7,14 @@
  * the page that owns it, so a failure on one screen cannot blank another.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { api, getLearnerId, setLearnerId as persistLearnerId, normaliseLearnerId } from '../lib/api.js';
+import { api, ApiError, getLearnerId, setLearnerId as persistLearnerId, normaliseLearnerId } from '../lib/api.js';
+import {
+  firebaseErrorMessage,
+  firebaseRegister,
+  firebaseSignIn,
+  firebaseSignOut,
+  isFirebaseConfigured,
+} from '../lib/firebase.js';
 import { createTranslator, detectLanguage, persistLanguage } from '../lib/i18n.js';
 import { applyTheme, getStoredTheme, persistTheme, watchSystemTheme } from '../lib/theme.js';
 
@@ -220,6 +227,27 @@ export function AppProvider({ children }) {
 
   const signIn = useCallback(
     async (email, password) => {
+      // Firebase authenticates when it is configured; the server then verifies
+      // the ID token and returns the account it belongs to.
+      if (isFirebaseConfigured) {
+        let result;
+        try {
+          result = await firebaseSignIn(email, password);
+        } catch (err) {
+          throw new ApiError(firebaseErrorMessage(err), { code: err?.code ?? 'firebase_error' });
+        }
+        if (!result.emailVerified) {
+          await firebaseSignOut().catch(() => {});
+          throw new ApiError(
+            'Verify your email address before signing in. Check your inbox for the verification link.',
+            { code: 'email_not_verified' },
+          );
+        }
+        const session = await api.session();
+        await applySession(session);
+        notify(`Signed in as ${session.user?.email ?? email}.`, 'success');
+        return session.user;
+      }
       const session = await api.login({ email, password });
       await applySession(session);
       notify(`Signed in as ${session.user.email}.`, 'success');
@@ -230,6 +258,21 @@ export function AppProvider({ children }) {
 
   const registerAccount = useCallback(
     async (email, password, displayName) => {
+      if (isFirebaseConfigured) {
+        try {
+          await firebaseRegister(email, password, displayName);
+        } catch (err) {
+          throw new ApiError(firebaseErrorMessage(err), { code: err?.code ?? 'firebase_error' });
+        }
+        // No session yet: the address must be verified first, and the server
+        // refuses a token whose email is unverified.
+        notify(
+          `Account created. A verification link was sent to ${email}. Verify it, then sign in.`,
+          'success',
+          { timeoutMs: 14000 },
+        );
+        return { needsVerification: true };
+      }
       const session = await api.register({ email, password, displayName });
       await applySession(session);
       notify('Account created. Your library is private to this account.', 'success');
@@ -239,6 +282,7 @@ export function AppProvider({ children }) {
   );
 
   const signOut = useCallback(async () => {
+    if (isFirebaseConfigured) await firebaseSignOut().catch(() => {});
     await api.logout();
     setAuth({ state: 'ready', mode: config?.auth?.mode ?? null, user: null, limitations: [] });
     setMaterials([]);

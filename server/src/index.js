@@ -6,7 +6,7 @@
  */
 import config from './config.js';
 import { createLogger } from './logger.js';
-import { createStore } from './storage/store.js';
+import { createDataStore } from './storage/index.js';
 import { createRetrievalService } from './retrieval/service.js';
 import { createProvider } from './ai/provider.js';
 import { createTeacher } from './ai/teacher.js';
@@ -25,7 +25,7 @@ import { provisionTeamAccounts } from './auth/team.js';
 
 const logger = createLogger({ level: process.env.LOG_LEVEL ?? (config.env === 'production' ? 'info' : 'debug') });
 
-const store = await createStore({ dataDir: config.dataDir, logger });
+const store = await createDataStore({ config, logger });
 // The five authorised teammates get an account once, with a temporary password
 // they must replace at first sign-in. Existing accounts are never touched.
 if (config.auth.mode === 'required') {
@@ -76,6 +76,8 @@ const server = app.listen(config.port, () => {
     url: `http://localhost:${config.port}`,
     env: config.env,
     dataDir: config.dataDir,
+    store: store.driver ?? 'json',
+    identity: config.firebase.configured ? 'firebase' : 'password',
   });
 
   // Say out loud which environment values were ignored, so "why is it on a
