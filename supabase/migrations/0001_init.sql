@@ -73,8 +73,14 @@ create index if not exists material_passages_material_idx
 -- ---------------------------------------------------------------------------
 -- profiles - a read-only view over the account records, for reporting and for
 -- reviewing who has access without reading JSON by hand.
+--
+-- security_invoker makes the view run with the caller's privileges instead of
+-- the owner's. Without it a view on a table that has RLS enabled and no read
+-- policies is an RLS bypass: anyone granted access to the view would read every
+-- account. Client roles are also revoked below, so access is service-role only.
 -- ---------------------------------------------------------------------------
-create or replace view public.profiles as
+create or replace view public.profiles
+  with (security_invoker = true) as
 select
   r.id                                              as user_id,
   r.data ->> 'firebaseUid'                          as firebase_uid,
@@ -113,10 +119,14 @@ create trigger records_touch_updated_at
 -- The backend talks to Postgres with the service-role key, which BYPASSES RLS;
 -- ownership is therefore enforced in the API (the account id always comes from
 -- a verified Firebase ID token, never from the request body). RLS is still
--- enabled and all public roles are denied, so a leaked anon key cannot read a
--- single row. The policies below exist for the path where a client is given a
--- JWT that carries a `firebase_uid` claim (a proxy that bridges Firebase to
--- Supabase) - they never widen access for an anonymous request.
+-- enabled and all client roles are denied, so a leaked anon key cannot read a
+-- single row.
+--
+-- Deliberately no permissive policy is defined for `anon` or `authenticated`.
+-- Supabase auth.jwt() belongs to Supabase Auth; a Firebase ID token never
+-- populates it, so a policy keyed on a `firebase_uid` claim would be dead code
+-- and only invite the false belief that client access is supported. Only
+-- deny rules are declared here, so the tables stay closed to client roles.
 -- ---------------------------------------------------------------------------
 alter table public.records           enable row level security;
 alter table public.material_passages enable row level security;
@@ -125,16 +135,21 @@ revoke all on public.records           from anon, authenticated;
 revoke all on public.material_passages from anon, authenticated;
 revoke all on public.profiles          from anon, authenticated;
 
-drop policy if exists records_owner_select on public.records;
-create policy records_owner_select on public.records
-  for select to authenticated
-  using (owner_id is not null and owner_id = nullif(auth.jwt() ->> 'firebase_uid', ''));
+-- The backend connects as `service_role`. It bypasses RLS, but it still needs
+-- table privileges: a table created by another role does not automatically
+-- grant them, and until they exist every API request fails with
+--   403 permission denied for table records
+-- even though the service-role key is correct. Grant exactly what the store
+-- reads and writes, and nothing more.
+grant usage on schema public to service_role;
+grant select, insert, update, delete on public.records           to service_role;
+grant select, insert, update, delete on public.material_passages to service_role;
+grant select on public.profiles to service_role;
 
-drop policy if exists records_owner_write on public.records;
-create policy records_owner_write on public.records
-  for all to authenticated
-  using (owner_id is not null and owner_id = nullif(auth.jwt() ->> 'firebase_uid', ''))
-  with check (owner_id is not null and owner_id = nullif(auth.jwt() ->> 'firebase_uid', ''));
+-- Records are service-role only; drop the old claim-based policies so a
+-- re-run of this migration on an existing database removes them.
+drop policy if exists records_owner_select on public.records;
+drop policy if exists records_owner_write  on public.records;
 
 -- Passages inherit ownership through their material: the API is the only
 -- writer (service role), and no client role may read another account's text.
@@ -147,12 +162,21 @@ create policy material_passages_deny_all on public.material_passages
 -- ---------------------------------------------------------------------------
 -- Storage: private bucket for the uploaded originals
 -- ---------------------------------------------------------------------------
+-- `do update` forces the bucket back to private if it already exists and was
+-- created public: a public bucket serves originals to anyone with the URL and
+-- bypasses every RLS policy below.
 insert into storage.buckets (id, name, public, file_size_limit)
 values ('materials', 'materials', false, 20971520)
-on conflict (id) do nothing;
+on conflict (id) do update
+  set public          = false,
+      file_size_limit = excluded.file_size_limit;
 
+-- Deny-only policy. The previous variant used `bucket_id <> 'materials'`,
+-- which granted client roles access to every *other* bucket and denied
+-- nothing. A policy with `using (false)` only ever removes access.
 drop policy if exists materials_no_client_access on storage.objects;
-create policy materials_no_client_access on storage.objects
+drop policy if exists materials_client_deny    on storage.objects;
+create policy materials_client_deny on storage.objects
   for all to authenticated
-  using (bucket_id <> 'materials')
-  with check (bucket_id <> 'materials');
+  using (bucket_id = 'materials' and false)
+  with check (bucket_id = 'materials' and false);

@@ -70,9 +70,14 @@ test('the PDF/office readers and static bundle paths do not include the dotenv f
     .readFile(path.join(PROJECT_ROOT, 'web', 'vite.config.js'), 'utf8')
     .catch(() => '');
   if (viteConfig) {
-    // Vite only inlines `VITE_`-prefixed values by default. Copying env files or
-    // widening that prefix is how a server key ends up in a browser bundle.
-    assert.doesNotMatch(viteConfig, /envDir|loadEnv\(|dotenv|envPrefix/);
+    // Vite only inlines `VITE_`-prefixed values by default. Reading `.env` from
+    // the repository root is required and safe - it is the file the server reads
+    // and where `.env.example` documents `VITE_FIREBASE_*`. What must never
+    // happen is widening that prefix, or hand-copying the env file into the
+    // bundle. The scan above is the real check: the configured AI key must not
+    // appear in web/dist.
+    assert.doesNotMatch(viteConfig, /envPrefix|loadEnv\(|dotenv/);
+    assert.match(viteConfig, /envDir/);
   }
   const serverSource = await fs.readFile(
     path.join(fileURLToPath(new URL('../src/index.js', import.meta.url))),

@@ -29,12 +29,22 @@ export async function createDataStore({ config, logger }) {
       logger,
     });
 
+    // The publishable/anon key cannot write and would silently bypass nothing:
+    // it is a different credential with different privileges, so say so plainly
+    // instead of failing later with a confusing 401 from PostgREST.
+    if (String(supabase.serviceRoleKey ?? '').startsWith('sb_publishable_')) {
+      logger?.warn?.(
+        'SUPABASE_SERVICE_ROLE_KEY looks like a publishable key; use the secret/service_role key',
+        { fix: 'Supabase → Project settings → API keys → the secret key (service_role).' },
+      );
+    }
+
     if (typeof supabase.fetchImpl === 'function' || supabase.url) {
       // A cheap read proves the URL, the key and the migration are all valid
       // before the server starts accepting requests.
       try {
         await adapters.client.selectAll('records', {
-          filters: { collection: 'eq.users' },
+          filters: { collection: 'users' },
           columns: 'id',
         });
         logger?.info('Supabase storage connected', { url: adapters.client.baseUrl });

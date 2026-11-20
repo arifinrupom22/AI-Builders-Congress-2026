@@ -16,7 +16,6 @@
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import AppError from '../errors.js';
-import { findTeamMember } from './team.js';
 
 const scrypt = promisify(crypto.scrypt);
 
@@ -136,29 +135,21 @@ export function createAuthService({ store, config }) {
         throw AppError.badRequest(`A password can be at most ${PASSWORD_MAX} characters.`);
       }
 
-      // Invitation-only by default. The allowlist stays on the server; the
-      // rejection never says whether an address is known, only that it is not
-      // invited.
-      let allowedName = null;
-      if ((config.auth?.registrationPolicy ?? 'allowlist') === 'allowlist') {
-        const member = findTeamMember(emailKey);
-        if (!member) {
-          throw new AppError('LearnSphere AI is invitation-only. Ask the team to add your email address first.', {
-            status: 403,
-            code: 'email_not_invited',
-            expose: true,
-          });
-        }
-        allowedName = member.displayName;
+      // Registration is open by default: any visitor may create an account.
+      // A deployment can still close sign-ups with AUTH_REGISTRATION_POLICY.
+      if (config.auth?.registrationPolicy === 'closed') {
+        throw new AppError('New account creation is currently closed on this deployment.', {
+          status: 403,
+          code: 'registration_closed',
+          expose: true,
+        });
       }
 
       const passwordHash = await hashPassword(password);
       const user = await store.createUserRecord({
         email: emailKey,
         emailKey,
-        // An invited person is registered under their real team name; anyone
-        // else (open policy) keeps the name they typed.
-        displayName: allowedName || (displayName ?? '').trim().slice(0, 60) || emailKey.split('@')[0],
+        displayName: (displayName ?? '').trim().slice(0, 60) || emailKey.split('@')[0],
         passwordHash,
         // They chose their own password, so no forced change.
         mustChangePassword: false,

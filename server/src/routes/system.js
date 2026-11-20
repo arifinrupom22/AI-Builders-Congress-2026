@@ -62,8 +62,10 @@ export function systemRouter({ store, retrieval, teacher, config, startedAt = Da
               'Storage is local disk, not multi-tenant cloud storage.',
             ]
           : [
-              'Accounts are required (AUTH_MODE=required): every /api route except health, config and auth needs a valid session.',
-              'Storage is local disk. A single instance with a persistent disk is supported; multiple instances need shared storage and a shared rate-limit store.',
+              'Accounts are required (AUTH_MODE=required): every /api route except health, config and auth needs a verified identity.',
+              config.supabase?.configured
+                ? 'Storage is Supabase PostgreSQL, with uploaded originals in a private object bucket.'
+                : 'Storage is local disk. A single instance with a persistent disk is supported; multiple instances need shared storage and a shared rate-limit store.',
             ],
     });
   });

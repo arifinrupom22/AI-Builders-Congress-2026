@@ -343,11 +343,11 @@ export const config = Object.freeze({
   auth: {
     mode: authMode,
     /**
-     * 'allowlist' (default) restricts account creation to the team addresses in
-     * auth/team.js. 'open' is for a deployment that should accept any sign-up;
-     * it is never the default and the UI is told about it explicitly.
+     * 'open' (default) lets any visitor create an account. 'closed' stops new
+     * sign-ups while leaving existing accounts working, and the UI states that
+     * registration is closed instead of offering a form that cannot succeed.
      */
-    registrationPolicy: (str('AUTH_REGISTRATION_POLICY') || 'allowlist').toLowerCase() === 'open' ? 'open' : 'allowlist',
+    registrationPolicy: (str('AUTH_REGISTRATION_POLICY') || 'open').toLowerCase() === 'closed' ? 'closed' : 'open',
     sessionTtlDays: num('SESSION_TTL_DAYS', 14, { min: 1, max: 90 }),
     cookieName: 'ls_session',
     resetTokenTtlMinutes: num('AUTH_RESET_TTL_MINUTES', 30, { min: 5, max: 120 }),
@@ -418,10 +418,10 @@ export const config = Object.freeze({
         firebaseConfigured: this.firebase.configured,
         // Where application data lives. The UI only uses this for diagnostics.
         store: this.supabase.configured ? 'supabase' : 'json',
-        // The allowlist itself is never exposed; only the fact that sign-up is
-        // invitation-only, so the form can say so before a request is made.
+        // Whether a visitor may create an account at all, so the form can say
+        // so before a request is made.
         registrationPolicy: this.auth.registrationPolicy,
-        invitationOnly: this.auth.registrationPolicy === 'allowlist',
+        invitationOnly: this.auth.registrationPolicy === 'closed',
         sessionTtlDays: this.auth.sessionTtlDays,
       },
       limits: {

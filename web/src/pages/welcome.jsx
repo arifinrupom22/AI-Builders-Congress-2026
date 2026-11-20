@@ -3,7 +3,7 @@
  *
  * This is what a signed-out visitor sees at `/`. It is a real page with working
  * links: Explore LearnSphere opens the sign-in form, Create account opens the
- * invitation-only registration form. Nothing private is reachable from here.
+ * public Create Account form. Nothing private is reachable from here.
  */
 import { useApp } from '../store/AppContext.jsx';
 import { PublicChrome } from '../components/PublicChrome.jsx';

@@ -57,9 +57,9 @@ const en = {
   'welcome.ctaLogin': 'Log in',
   'welcome.ctaSignup': 'Create account',
   'welcome.ctaExplore': 'Explore LearnSphere',
-  'auth.inviteOnlyTitle': 'Invitation only',
+  'auth.inviteOnlyTitle': 'Registration closed',
   'auth.inviteOnlyBody':
-    'LearnSphere AI is invitation-only: the five team email addresses on the access list can create an account. Ask the team if your address is missing.',
+    'New account creation is currently closed on this deployment. If you already have an account, sign in instead.',
   'welcome.f1t': 'Answered from your documents',
   'welcome.f1b': 'Every claim carries the page it came from. When the material does not cover a question, the tutor says so instead of inventing an answer.',
   'welcome.f2t': 'Practice that shows its evidence',
@@ -219,9 +219,9 @@ const bn = {
   'welcome.ctaLogin': 'লগ ইন',
   'welcome.ctaSignup': 'অ্যাকাউন্ট খুলুন',
   'welcome.ctaExplore': 'LearnSphere শুরু করুন',
-  'auth.inviteOnlyTitle': 'শুধুমাত্র আমন্ত্রিতদের জন্য',
+  'auth.inviteOnlyTitle': 'নিবন্ধন বন্ধ',
   'auth.inviteOnlyBody':
-    'LearnSphere AI শুধুমাত্র আমন্ত্রিতদের জন্য: অ্যাক্সেস তালিকার পাঁচটি টিম ইমেইল দিয়েই অ্যাকাউন্ট তৈরি করা যাবে। আপনার ঠিকানা না থাকলে টিমকে জানান।',
+    'এই ডিপ্লয়মেন্টে নতুন অ্যাকাউন্ট তৈরি এখন বন্ধ। আপনার অ্যাকাউন্ট থাকলে লগ ইন করুন।',
   'welcome.f1t': 'আপনার নথি থেকেই উত্তর',
   'welcome.f1b': 'প্রতিটি দাবির সাথে তার পৃষ্ঠা দেখানো হয়। উপকরণে উত্তর না থাকলে শিক্ষক বানিয়ে না বলে জানিয়ে দেন।',
   'welcome.f2t': 'প্রমাণসহ অনুশীলন',

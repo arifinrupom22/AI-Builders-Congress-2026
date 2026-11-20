@@ -24,11 +24,6 @@ services:
       # signed-in account.
       - key: AUTH_MODE
         value: required
-      # Entered in the Render dashboard, never committed. Without it (or with a
-      # value shorter than the minimum length) no team account is created at
-      # startup and nobody can sign in.
-      - key: TEAM_BOOTSTRAP_PASSWORD
-        sync: false
       # Optional: only needed for browser calls that arrive from another origin.
       # The SPA served by this service is same-origin, so it is not required.
       - key: CORS_ALLOWED_ORIGINS

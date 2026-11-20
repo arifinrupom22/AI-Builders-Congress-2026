@@ -11,7 +11,7 @@
   <a href="https://ai-builders-congress-2026.onrender.com/api/health"><img alt="API" src="https://img.shields.io/badge/API-health-46a2f1?style=flat-square" /></a>
   <img alt="Node" src="https://img.shields.io/badge/node-%E2%89%A520.11-339933?style=flat-square&logo=node.js&logoColor=white" />
   <img alt="React" src="https://img.shields.io/badge/react-19-61dafb?style=flat-square&logo=react&logoColor=black" />
-  <img alt="Tests" src="https://img.shields.io/badge/tests-325_passing-2ea44f?style=flat-square" />
+  <img alt="Tests" src="https://img.shields.io/badge/tests-331_passing-2ea44f?style=flat-square" />
   <img alt="License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" />
 </p>
 
@@ -202,7 +202,6 @@ key the app runs in offline demo mode.
 | `npm test` | Full server suite against a real Express app |
 | `npm run test:eval` | Offline grounded-answer evaluation set |
 | `npm run samples:seed` | Regenerate the sample study files in `samples/` |
-| `npm run team:set-password` | Reset the five team accounts in place |
 
 Upload the files in `samples/` from **My Materials** to try it immediately — they cover every
 supported format, including Bangla PDF/Word/RTF examples. See [`samples/README.md`](samples/README.md).
@@ -214,7 +213,7 @@ learnsphere-ai/
 ├── server/                  Express API
 │   ├── src/
 │   │   ├── ai/              provider chain, prompts, teacher, instructions
-│   │   ├── auth/            accounts, sessions, team allowlist
+│   │   ├── auth/            accounts, sessions, Firebase token verification
 │   │   ├── documents/       PDF, Word, ODT, RTF, text extraction
 │   │   ├── retrieval/       tokenisation and BM25 index
 │   │   ├── quiz/            grounded quiz generation
@@ -227,7 +226,7 @@ learnsphere-ai/
 │   ├── src/pages/           dashboard, chat, materials, quiz, plan, settings…
 │   ├── src/components/      shell, brand, shared UI
 │   └── src/styles/          public and app themes
-├── scripts/                 dev runner, sample generator, team password reset
+├── scripts/                 dev runner, sample generator
 ├── samples/                 generated demo material (8 formats)
 ├── supabase/migrations/    PostgreSQL schema, indexes and RLS
 ├── server/src/auth/firebase.js  Firebase ID-token verification
@@ -237,19 +236,23 @@ learnsphere-ai/
 
 ## Configuration
 
-Copy `.env.example` to `.env`. Every value is optional; the app runs without configuration.
-The full annotated list is in [`.env.example`](.env.example).
+Copy `.env.example` to `.env` in the repository root. Every value is optional; the app runs
+without configuration. The full annotated list is in [`.env.example`](.env.example).
+
+That one file is read by both sides: the server loads it with dotenv, and `web/vite.config.js` is
+configured with `envDir` pointing at the repository root, so the `VITE_FIREBASE_*` web config is
+found during a build. Vite still inlines only `VITE_`-prefixed values, so every other key stays
+on the server.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `8787` | HTTP port |
-| `NODE_ENV` | `development` | `production` also switches the `AUTH_MODE` default |
+| `NODE_ENV` | `development` | `production` also switches the `AUTH_MODE` default. Set it in the process environment, **not** in `.env`: Vite reads `.env` during a build and would ship React's development bundle |
 | `AUTH_MODE` | `required` in production, `local` otherwise | identity mode (see below) |
 | `SESSION_TTL_DAYS` | `14` | account session lifetime |
 | `AUTH_RESET_TTL_MINUTES` | `30` | password-reset token lifetime |
 | `AUTH_DEV_RESET` | on outside production | return the one-time reset token to the page; `0` disables |
-| `AUTH_REGISTRATION_POLICY` | `allowlist` | `allowlist` (five team addresses) or `open` |
-| `TEAM_BOOTSTRAP_PASSWORD` | — | shared password for the five authorised accounts (only while they use the built-in password store) |
+| `AUTH_REGISTRATION_POLICY` | `open` | `open` (anyone may sign up) or `closed` (no new accounts) |
 | `FIREBASE_PROJECT_ID` | — | enables Firebase ID-token verification; the provider becomes Firebase |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | — | enables the Supabase data store (server-side only) |
 | `SUPABASE_STORAGE_BUCKET` | `materials` | private bucket for uploaded originals |
@@ -315,30 +318,29 @@ The account row is created on the first verified request and keyed by the Fireba
 sign-in updates only `emailVerified` and the display name, so the account id — and therefore every
 row it owns — stays stable.
 
-### The five team accounts
+### Registration and email verification
 
-The five allowlisted addresses are preserved:
+The account system starts clean: there is no seeded account, no invitation list and no default
+password anywhere in the repository or the environment.
 
-1. `arifinrupom30@gmail.com`
-2. `sneharahman634@gmail.com`
-3. `nabilanawshin12@gmail.com`
-4. `sbipro89@gmail.com`
-5. `muhammadabirali@gmail.com`
+1. **Create account** — a visitor opens `/signup` and enters a name, email and password. The form
+   calls Firebase Email/Password, sets the display name and asks Firebase to send a verification
+   link. The new account is signed out immediately, so an unverified account never holds a session.
+2. **Verify** — the person follows the link in that email. Until they do, the server refuses their
+   token with `403 email_not_verified` and the UI explains that verification is pending instead of
+   showing a half-working account.
+3. **Sign in** — Firebase authenticates, the browser sends the verified ID token as
+   `Authorization: Bearer <idToken>`, and the server verifies it before touching any data. The
+   account row is created on that first verified request and keyed by the Firebase UID, so it is
+   stable for the life of the account.
+4. **Store** — the profile and every owned row (materials, passages, sessions, quizzes, attempts,
+   flashcard decks and reviews, visuals, learning paths, study plans) live in Supabase with
+   `owner_id` set to that Firebase UID. The service-role backend filters every read and write by the
+   UID from the verified token, so two accounts can never see each other's rows.
 
-They can be moved to Firebase in one of two supported ways. No password is invented and no hash is
-copied: Firebase cannot import scrypt hashes.
-
-- **Recommended — password-reset migration.** Create the same five addresses in Firebase
-  (Authentication → Users → Add user, or let each person sign up), then have each person complete
-  "Forgot password". Their existing data is kept: the first verified Firebase token is matched to
-  the existing account row by email, and the row keeps its original id, so materials, quizzes,
-  plans and progress are all still there.
-- **Interim — legacy accounts.** Until an address exists in Firebase, the server-side password
-  accounts keep working exactly as before (scrypt hashes, HttpOnly session cookie). Sign-in code
-  prefers Firebase when it is configured and falls back to the password route when it is not.
-
-`TEAM_BOOTSTRAP_PASSWORD` still provisions the five accounts on a deployment that has not moved to
-Firebase. `npm run team:set-password` updates them in place.
+Registration can be closed on a deployment with `AUTH_REGISTRATION_POLICY=closed`; accounts that
+already exist keep signing in. There is no email-based adoption of an older account row: an account
+is only ever the Firebase UID that signed up for it.
 
 ### Sessions, CSRF and route protection
 
@@ -411,9 +413,11 @@ collection with `read()` / `update(mutator)` over `records`, and blob storage ov
 - Row Level Security is **enabled** on `records` and `material_passages`, and `anon` /
   `authenticated` are revoked, so a leaked anon key reads nothing.
 - The service-role key bypasses RLS by design. That is why the API checks ownership itself instead
-  of assuming the database will. The migration also ships owner policies keyed on a
-  `firebase_uid` JWT claim for a deployment that later puts a JWT-bridging proxy in front of
-  Postgres; they never widen access for an anonymous request.
+  of assuming the database will.
+- No permissive policy is defined for `anon` or `authenticated`: `auth.jwt()` belongs to Supabase
+  Auth and a Firebase ID token never populates it, so a claim-based policy would be dead code. Only
+  deny rules exist. `service_role` still needs table privileges even though it bypasses RLS, so the
+  migration grants exactly the ones the store uses.
 - Uploaded files are in a **private** bucket. They are only read through the API, after the same
   ownership check, and never exposed as a public URL.
 
@@ -430,8 +434,8 @@ and a deployment uses exactly one of them. To carry existing files into Supabase
 4. Insert each `chunks/<material-id>.json` array into `material_passages` with `position` as the
    array index.
 
-The five team accounts migrate the same way: their `users` row keeps its id, and a Firebase account
-that verifies the same email is attached to it, so materials, quizzes and progress survive.
+Account rows are keyed by the Firebase UID. A fresh deployment starts with no account rows at all:
+the first row for a person is created by their own verified Firebase sign-up.
 
 ### Local JSON layout (development driver)
 
@@ -478,7 +482,7 @@ All routes are JSON and require a session in `required` mode (except the public 
 ## Testing
 
 ```bash
-npm test           # 321 tests
+npm test           # 331 tests
 npm run test:eval  # 10 grounded-answer evaluations
 npm run build      # production bundle
 ```
@@ -518,7 +522,6 @@ be answered with `index.html`.
 | `SUPABASE_URL` | `https://<project>.supabase.co` | Enables the Supabase driver. |
 | `SUPABASE_SERVICE_ROLE_KEY` | service-role key | **Server-side only.** Never put it in a `VITE_` variable. |
 | `SUPABASE_STORAGE_BUCKET` | `materials` | Optional; defaults to `materials`. |
-| `TEAM_BOOTSTRAP_PASSWORD` | the team password | Only needed while the five accounts still use the built-in password store. |
 | `CORS_ALLOWED_ORIGINS` | e.g. `https://<site>` | Optional now that the SPA is same-origin. |
 | `LEARNSPHERE_AI_PROVIDER`, `LEARNSPHERE_AI_API_KEY`, `LEARNSPHERE_AI_MODEL` | `groq`, the key, `openai/gpt-oss-20b` | Optional; without them the app runs in local demo mode. |
 
@@ -543,16 +546,20 @@ is in front, and give the service a persistent disk when using the JSON driver.
 5. **Authentication → Templates** — review the verification and password-reset wording and sender.
 6. **Project settings → Service accounts → Generate new private key** — copy `project_id` to
    `FIREBASE_PROJECT_ID` and keep the JSON file out of the repository.
-7. Create or import the five team addresses under **Authentication → Users**, then have each person
-   use "Forgot password" (see [Authorised accounts](#the-five-team-accounts)).
+7. Nothing needs to be seeded under **Authentication → Users**: each person creates their own
+   account from `/signup` and verifies the email Firebase sends (see
+   [Registration and email verification](#registration-and-email-verification)).
 
 ### Supabase setup
 
 1. Create a project at <https://supabase.com>.
 2. **SQL Editor** — paste `supabase/migrations/0001_init.sql` and run it (or `supabase db push` with
-   the Supabase CLI). It is idempotent.
+   the Supabase CLI). It is idempotent: re-running it re-applies the `service_role` grants and
+   forces the bucket private.
 3. Confirm the objects exist: `records`, `material_passages`, the `profiles` view, and the private
-   `materials` storage bucket.
+   `materials` storage bucket. Also confirm the backend role can use them: with the service-role
+   key, `GET /rest/v1/records?select=id&limit=1` must answer `200 []`. A `403 permission denied`
+   means the grant block has not run.
 4. Confirm RLS: both tables show **RLS enabled** and no policy grants `anon` access.
 5. **Project settings → API** — copy the project URL to `SUPABASE_URL` and the **service_role** key to
    `SUPABASE_SERVICE_ROLE_KEY` (Render → Environment). Do not use the anon key here.
@@ -654,5 +661,5 @@ A three-minute judging path through the product:
    a syllabus in **Study plan** to show topics mapped to uploaded files, the gaps, and a daily
    schedule that can be edited and paused.
 
-In production the web app is account-protected; team accounts are provisioned from `.env`.
+In production registration is open: each person creates their own account from `/signup` and verifies the email Firebase sends.
 `AUTH_MODE=local` is the single-profile demo mode and is not authentication.

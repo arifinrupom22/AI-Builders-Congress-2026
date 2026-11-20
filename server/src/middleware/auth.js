@@ -124,37 +124,47 @@ export function attachSession({ config, authService, store = null, firebase = nu
       if (firebase?.configured && typeof authorization === 'string' && authorization.startsWith('Bearer ')) {
         const raw = authorization.slice('Bearer '.length).trim();
         const claims = raw ? await firebase.verifyIdToken(raw) : null;
-        if (!claims) {
+        // The public auth routes must stay answerable. A stale, revoked or
+        // unverified token is a normal "signed out" state there, not a broken
+        // server - otherwise one bad token in storage stops the app booting at
+        // all. Every protected route still refuses it.
+        const rejectable = !PUBLIC_API_PATHS.has(req.path) && !PUBLIC_API_PATHS.has(`/api${req.path}`);
+
+        if (!claims && rejectable) {
           throw new AppError('Your session has expired. Sign in again.', {
             status: 401,
             code: 'invalid_token',
             expose: true,
           });
         }
-        if (claims.emailVerified !== true) {
+        if (claims && claims.emailVerified !== true && rejectable) {
           throw new AppError('Verify your email address before using LearnSphere AI. Check your inbox for the link.', {
             status: 403,
             code: 'email_not_verified',
             expose: true,
           });
         }
-        const account = store?.upsertFirebaseUser ? await store.upsertFirebaseUser(claims) : null;
-        if (!account) {
-          throw new AppError('This account could not be loaded. Try signing in again.', {
-            status: 401,
-            code: 'account_unavailable',
-            expose: true,
-          });
+        if (claims && claims.emailVerified === true) {
+          const account = store?.upsertFirebaseUser ? await store.upsertFirebaseUser(claims) : null;
+          if (!account) {
+            throw new AppError('This account could not be loaded. Try signing in again.', {
+              status: 401,
+              code: 'account_unavailable',
+              expose: true,
+            });
+          }
+          req.auth = {
+            mode: 'required',
+            authenticated: true,
+            source: 'firebase',
+            user: publicUser(account),
+          };
+          req.learnerId = account.id;
+          res.setHeader('Cache-Control', 'no-store');
+          return next();
         }
-        req.auth = {
-          mode: 'required',
-          authenticated: true,
-          source: 'firebase',
-          user: publicUser(account),
-        };
-        req.learnerId = account.id;
-        res.setHeader('Cache-Control', 'no-store');
-        return next();
+        // Otherwise fall through: a legacy session cookie, or an anonymous
+        // visitor on a public route.
       }
 
       if (token) {

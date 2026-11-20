@@ -109,9 +109,57 @@ const SMALL_TALK_RULES = [
     category: 'ack',
     re: /^(?:ok|okay|k|kk|got it|gotcha|bujhlam|bujhechi|bujlam|thik ache|thikase|tik ache|accha|achha|nice|cool|great|perfect|\u09ac\u09c1\u099d\u09b2\u09be\u09ae|\u09a0\u09bf\u0995 \u0986\u099b\u09c7)$/i,
   },
+  // "Who are you?" arrives in many spellings, and every one of them must take
+  // the identity path. Sent to retrieval or the general prompt, the model
+  // answered from its own persona ("I am ChatGPT, an OpenAI language model"),
+  // which is exactly the answer this product must never give.
   {
     category: 'about',
-    re: /^(?:who are you|what are you|what can you do|what do you do|what is this|tumi ke|tui ke|apni ke|tumi ki korte paro|apni ki korte paren|tumi ki karate paro)$/i,
+    re: /^(?:who are you|who r u|who are u|who r ya|who r you|what are you|what r u|what r you|what can you do|what do you do|what is this|what is this app|what is this site|what is learnsphere|tell me about yourself|introduce yourself|how can you help(?: me)?|what can you help(?: me)? with|help|help me)/i,
+  },
+  {
+    category: 'about',
+    re: /^(?:who|what)(?:'s| is| are| r| s|s)?\s+(?:your|ur)\s+name$/i,
+  },
+  {
+    category: 'about',
+    re: /^(?:what|which)\s+(?:ai\s+|language\s+)?(?:model|llm|bot|assistant)\s+(?:are|r)\s+(?:you|u)(?:\s+(?:using|running|built on))?$/i,
+  },
+  {
+    category: 'about',
+    re: /^(?:are|r)\s+(?:you|u)\s+(?:a\s+|an\s+)?(?:chatgpt|gpt-?\d?|openai|claude|gemini|bard|llama|copilot|human|bot|robot|real(?: ai)?|ai model)(?:\s+(?:model|bot|assistant|ai))?$/i,
+  },
+  {
+    category: 'about',
+    re: /^(?:who|what)\s+(?:made|created|built|trained|developed|owns)\s+(?:you|u)$/i,
+  },
+  {
+    category: 'about',
+    re: /^(?:who|what)\s+(?:is|are)\s+(?:your|ur)\s+(?:creator|creators|developer|developers|maker|makers|owner|owners|company)$/i,
+  },
+  {
+    category: 'about',
+    re: /^(?:are|r)\s+(?:you|u)\s+(?:made|built|created|trained)\s+by\s+(?:openai|google|anthropic|meta|microsoft)$/i,
+  },
+  // Bangla script and Banglish forms of the same question.
+  { category: 'about', re: /^(?:tumi|tui|apni|tumi\s+ki|apni\s+ki)\s+ke$/i },
+  { category: 'about', re: /^(?:tomar|tor|apnar|apni|tumi)\s+(?:nam|naam)\s+ki$/i },
+  {
+    category: 'about',
+    re: /^(?:tomake|toke|apnake|tomader|apnader)\s+ke\s+(?:banaise|baniyeche|banalo|tairi\s+koreche|create\s+koreche|train\s+koreche)$/i,
+  },
+  {
+    category: 'about',
+    re: /^(?:tumi|tui|apni)\s+(?:ki|kono|ekta)?\s*(?:chatgpt|gpt|openai|claude|gemini|bot|robot|ai model)\s*(?:ho|hosen|hobi)?$/i,
+  },
+  { category: 'about', re: /^(?:\u0986\u09aa\u09a8\u09bf|\u09a4\u09c1\u09ae\u09bf|\u09a4\u09c1\u0987)\s+\u0995\u09c7$/ },
+  { category: 'about', re: /^(?:\u0986\u09aa\u09a8\u09be\u09b0|\u09a4\u09cb\u09ae\u09be\u09b0|\u09a4\u09cb\u09b0)\s+\u09a8\u09be\u09ae\s+\u0995\u09bf$/ },
+  {
+    category: 'about',
+    re: /^(?:\u0986\u09aa\u09a8\u09be\u0995\u09c7|\u09a4\u09cb\u09ae\u09be\u0995\u09c7)\s+\u0995\u09c7\s+(?:\u09ac\u09be\u09a8\u09bf\u09af\u09bc\u09c7\u099b\u09c7|\u09ac\u09be\u09a8\u09be\u09b2\u09cb|\u09a4\u09c8\u09b0\u09bf\s+\u0995\u09b0\u09c7\u099b\u09c7)$/ },
+  {
+    category: 'about',
+    re: /^(?:\u0986\u09aa\u09a8\u09bf|\u09a4\u09c1\u09ae\u09bf)\s+(?:\u0995\u09c7|\u0995\u09bf)\s*(?:chatgpt|gpt|\u09ac\u099f|ai)\s*(?:\u09b9\u09cb|\u09b9\u09c7\u09a8)?$/i,
   },
   // --- study intent -------------------------------------------------------
   // "Ami poralekha korbo" is a student saying they are about to study, not a
@@ -207,8 +255,9 @@ export function detectSmallTalk(question) {
   if (!rule) return null;
   // A greeting is short. Anything longer carries content and must be taught.
   // A study-intent sentence is a little longer ("i am going to study today"),
-  // but is still a statement about the session rather than a question.
-  const limit = rule.category === 'study' ? 9 : 5;
+  // but is still a statement about the session rather than a question. Identity
+  // questions span a few words too ("what can you help me with").
+  const limit = rule.category === 'study' ? 9 : rule.category === 'about' ? 8 : 5;
   if (text.split(' ').length > limit) return null;
   return rule.category;
 }

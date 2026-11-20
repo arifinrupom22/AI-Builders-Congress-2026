@@ -36,6 +36,12 @@ import {
   clampAnswer,
 } from './grounding.js';
 import { buildDemoAnswer, buildInsufficientAnswer, buildNoMaterialsAnswer } from './demoTeacher.js';
+import {
+  IDENTITY_RETRY_DIRECTIVE,
+  findIdentityClaims,
+  hasIdentityLeak,
+  sanitizeIdentityAnswer,
+} from './identity.js';
 
 /** Bangla characters in a string - the measure of "is this really Bangla". */
 export function banglaCharCount(text) {
@@ -138,32 +144,63 @@ export function createTeacher({ retrieval, provider, config, logger }) {
    * the requested language wins.
    */
   async function chatWithLanguage({ messages, maxTokens, temperature = 0.25, language }) {
+    const withDirective = (directive) =>
+      messages.map((message, index) =>
+        index === messages.length - 1
+          ? { ...message, content: `${message.content}\n\n${directive}` }
+          : message,
+      );
+
     const first = await provider.chat({ messages, temperature, maxTokens });
     const mismatched =
       language === 'bn'
         ? needsBanglaRetry(language, first.content)
         : needsEnglishRetry(language, first.content);
-    if (!mismatched) return first;
 
-    const directive = language === 'bn' ? BANGLA_RETRY_DIRECTIVE : ENGLISH_RETRY_DIRECTIVE;
-    const retryMessages = messages.map((message, index) =>
-      index === messages.length - 1
-        ? { ...message, content: `${message.content}\n\n${directive}` }
-        : message,
-    );
-    logger.warn('answer language did not match the request, retrying once', { language });
+    let chosen = first;
+    if (mismatched) {
+      const directive = language === 'bn' ? BANGLA_RETRY_DIRECTIVE : ENGLISH_RETRY_DIRECTIVE;
+      logger.warn('answer language did not match the request, retrying once', { language });
 
-    try {
-      const retry = await provider.chat({ messages: retryMessages, temperature, maxTokens });
-      const better =
-        language === 'bn'
-          ? banglaCharCount(retry.content) > banglaCharCount(first.content)
-          : latinCharCount(retry.content) > latinCharCount(first.content);
-      return better ? retry : first;
-    } catch (err) {
-      logger.warn('language retry failed, keeping the first answer', { message: err.message });
-      return first;
+      try {
+        const retry = await provider.chat({ messages: withDirective(directive), temperature, maxTokens });
+        const better =
+          language === 'bn'
+            ? banglaCharCount(retry.content) > banglaCharCount(first.content)
+            : latinCharCount(retry.content) > latinCharCount(first.content);
+        if (better) chosen = retry;
+      } catch (err) {
+        logger.warn('language retry failed, keeping the first answer', { message: err.message });
+      }
     }
+
+    // "Who are you?" is answered by the upstream model from its own identity
+    // ("I am ChatGPT, an AI language model made by OpenAI") unless the persona
+    // survives. The prompt asks for it; this checks and enforces it, because a
+    // judge asking that question must be answered by LearnSphere AI.
+    if (hasIdentityLeak(chosen.content)) {
+      const claims = findIdentityClaims(chosen.content).slice(0, 3);
+      logger.warn('model identified itself as another product, retrying once', { language, claims });
+
+      try {
+        const retry = await provider.chat({
+          messages: withDirective(IDENTITY_RETRY_DIRECTIVE),
+          temperature,
+          maxTokens,
+        });
+        if (!hasIdentityLeak(retry.content)) chosen = retry;
+      } catch (err) {
+        logger.warn('identity retry failed, rewriting the answer instead', { message: err.message });
+      }
+
+      // Whatever came back, the answer the student sees never claims to be
+      // another product. A genuine study mention of OpenAI or GPT-4 is not a
+      // self-claim and is left untouched.
+      const clean = sanitizeIdentityAnswer(chosen.content, language);
+      return { ...chosen, content: clean.text };
+    }
+
+    return chosen;
   }
 
   /**

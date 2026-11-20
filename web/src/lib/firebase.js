@@ -33,7 +33,13 @@ async function getFirebaseAuth() {
         import('firebase/auth'),
       ]);
       const app = getApps().length > 0 ? getApps()[0] : initializeApp(firebaseConfig);
-      return getAuth(app);
+      const auth = getAuth(app);
+      // `getAuth` returns before the persisted session has been read back from
+      // IndexedDB. Waiting for it is what keeps a signed-in user signed in after
+      // a page refresh: without this the first request after a reload carried no
+      // ID token, so the app looked signed out.
+      await auth.authStateReady?.();
+      return auth;
     })();
   }
   return authPromise;

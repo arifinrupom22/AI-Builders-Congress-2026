@@ -74,6 +74,40 @@ test('a removed row is deleted, and an unchanged collection writes nothing', asy
   assert.equal(JSON.stringify(client.calls), callsBefore);
 });
 
+test('an account session is stored as a keyed row, so Supabase can persist it', async () => {
+  // Regression: the adapter keys every row on `id`. Session and reset rows used
+  // to be pushed without one, so the driver dropped them on write and every
+  // password login was immediately unauthenticated.
+  const client = recordingClient([]);
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ls-supabase-session-'));
+  const adapters = { collections: (name) => createSupabaseCollection({ client, collection: name }), blobs: null };
+
+  const store = await createStore({ dataDir, adapters });
+  await store.createAuthSession({
+    tokenHash: 'hash-1',
+    csrfHash: 'csrf-1',
+    userId: 'uid-1',
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+  await store.createPasswordReset({
+    tokenHash: 'reset-1',
+    userId: 'uid-1',
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+
+  const sessionInserts = client.calls.inserts.filter((row) => row.collection === 'auth-sessions');
+  const resetInserts = client.calls.inserts.filter((row) => row.collection === 'password-resets');
+  assert.equal(sessionInserts.length, 1);
+  assert.equal(resetInserts.length, 1);
+  assert.ok(sessionInserts[0].id, 'a session row needs an id');
+  assert.ok(resetInserts[0].id, 'a reset row needs an id');
+
+  // A fresh store reading the same rows can find both again.
+  const reread = await createStore({ dataDir, adapters });
+  assert.equal((await reread.findAuthSession('hash-1'))?.userId, 'uid-1');
+  assert.equal((await reread.findPasswordReset('reset-1'))?.userId, 'uid-1');
+});
+
 test('a failed mutator leaves the stored rows untouched', async () => {
   const client = recordingClient([{ collection: 'materials', id: 'a', owner_id: 'u1', data: { id: 'a' }, created_at: '1' }]);
   const collection = createSupabaseCollection({ client, collection: 'materials', scope: 'u1' });
@@ -218,36 +252,90 @@ test('the whole store works against database adapters without touching disk', as
   await fs.rm(dataDir, { recursive: true, force: true });
 });
 
-test('a Firebase identity is attached to an existing account by email', async () => {
+test('a new Firebase account is keyed by its UID, never adopted by email', async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'learnsphere-firebase-user-'));
   const store = await createStore({ dataDir, logger: null });
 
-  const legacy = await store.createUserRecord({
-    email: 'arifinrupom30@gmail.com',
-    emailKey: 'arifinrupom30@gmail.com',
-    displayName: 'Rupom',
+  // An account row that no Firebase sign-up created is not adopted: accounts
+  // start clean, one row per Firebase UID.
+  const stray = await store.createUserRecord({
+    email: 'unrelated@example.com',
+    emailKey: 'unrelated@example.com',
+    displayName: 'Unrelated',
     passwordHash: 'scrypt',
   });
 
   const attached = await store.upsertFirebaseUser({
     uid: 'firebase-uid-42',
-    email: 'arifinrupom30@gmail.com',
-    displayName: 'Rupom',
+    email: 'stray@example.com',
+    displayName: 'Stray',
     emailVerified: true,
   });
-
-  // The same row keeps its id, so every material and plan still belongs to it.
-  assert.equal(attached.id, legacy.id);
+  assert.equal(attached.id, 'firebase-uid-42');
+  assert.notEqual(attached.id, stray.id);
   assert.equal(attached.firebaseUid, 'firebase-uid-42');
   assert.equal(attached.authProvider, 'firebase');
   assert.equal(attached.emailVerified, true);
-  assert.equal((await store.findUserByEmailKey('arifinrupom30@gmail.com')).id, legacy.id);
+  assert.equal((await store.getUserById(stray.id)).id, stray.id, 'the unrelated row is untouched');
 
   const fresh = await store.upsertFirebaseUser({ uid: 'firebase-uid-9', email: 'new@example.com', emailVerified: true });
   assert.equal(fresh.id, 'firebase-uid-9');
   assert.equal(fresh.displayName, 'new');
   assert.equal(fresh.mustChangePassword, false);
   assert.equal((await store.getUserById('firebase-uid-9')).email, 'new@example.com');
+
+  await fs.rm(dataDir, { recursive: true, force: true });
+});
+
+test('PostgREST filters carry exactly one eq. prefix', async () => {
+  const urls = [];
+  const fetchImpl = async (url) => {
+    urls.push(String(url));
+    return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const client = createSupabaseClient({ url: 'https://demo.supabase.co', serviceRoleKey: 'service-key', fetchImpl });
+
+  await client.selectAll('records', { filters: { collection: 'materials', owner_id: 'uid-1' } });
+  const collection = createSupabaseCollection({ client, collection: 'materials', scope: 'uid-1' });
+  await collection.read();
+  const blobs = createSupabaseBlobs({ client });
+  await blobs.readPassages('material-1');
+
+  assert.equal(urls.length, 3);
+  for (const url of urls) assert.doesNotMatch(url, /eq\.eq\./);
+  assert.match(urls[0], /collection=eq\.materials/);
+  assert.match(urls[0], /owner_id=eq\.uid-1/);
+  assert.match(urls[1], /collection=eq\.materials/);
+  assert.match(urls[2], /material_id=eq\.material-1/);
+});
+
+test('a copied rest/v1 endpoint is normalised to the project origin', () => {
+  const client = createSupabaseClient({ url: 'https://demo.supabase.co/rest/v1/', serviceRoleKey: 'service-key' });
+  assert.equal(client.baseUrl, 'https://demo.supabase.co');
+  assert.equal(client.configured, true);
+});
+
+test('an unchanged Firebase identity does not rewrite the account row', async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'learnsphere-firebase-norewrite-'));
+  const store = await createStore({ dataDir, logger: null });
+  const claims = { uid: 'firebase-uid-7', email: 'same@example.com', displayName: 'Same', emailVerified: true };
+
+  await store.upsertFirebaseUser(claims);
+
+  let writes = 0;
+  const update = store.users.update.bind(store.users);
+  store.users.update = (mutator) => {
+    writes += 1;
+    return update(mutator);
+  };
+
+  const again = await store.upsertFirebaseUser(claims);
+  assert.equal(writes, 0);
+  assert.equal(again.id, 'firebase-uid-7');
+
+  // A real change still reaches storage.
+  await store.upsertFirebaseUser({ ...claims, emailVerified: false });
+  assert.equal(writes, 1);
 
   await fs.rm(dataDir, { recursive: true, force: true });
 });

@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
@@ -15,19 +16,34 @@ const apiPort = Number.isInteger(configuredPort) && configuredPort >= 1 && confi
 
 export default defineConfig(({ command }) => {
   /**
-   * The published bundle is always a production bundle, but a hosting
-   * environment can export `NODE_ENV=development` and Vite honours it: the
-   * production build did, and `vite build` then emitted React's *development*
-   * build - measured at 425.72 kB for the vendor chunk against 218.81 kB for
-   * the same code built for production, plus slower rendering at runtime.
-   * Pinning it here rather than in the host's settings keeps `npm run build`
-   * correct on any machine, and only affects builds - the dev server still runs
-   * with React's development build and its warnings.
+   * The published bundle must always be a production bundle.
+   *
+   * `NODE_ENV` must therefore NOT be set in the root `.env`: Vite 8 reads that
+   * file (see `envDir`), exports its `NODE_ENV` as `VITE_USER_NODE_ENV`, and
+   * forces `process.env.NODE_ENV` back to `development` *after* this function
+   * returns - so a production build silently emitted React's development build
+   * (586 kB vendor chunk instead of 379 kB, plus slower rendering). The
+   * assignment below cannot win against that, and pinning it with `define`
+   * alone produced a production React with development JSX, which crashed with
+   * `jsxDEV is not a function`. The template and the local `.env` therefore
+   * leave `NODE_ENV` to the process environment (Render sets `production` for
+   * the deploy; unset means Vite's production default for a build).
+   *
+   * Only affects builds - the dev server still runs with React's development
+   * build and its warnings.
    */
   if (command === 'build') process.env.NODE_ENV = 'production';
 
   return {
     plugins: [react()],
+    /**
+     * Read `.env` from the repository root, which is where the server reads it
+     * and where `.env.example` documents it. Vite defaults to `web/`, so the
+     * `VITE_FIREBASE_*` web config described in the README was never seen and a
+     * build silently shipped without Firebase. Only `VITE_`-prefixed values are
+     * inlined, so the server-only keys stay out of the bundle.
+     */
+    envDir: fileURLToPath(new URL('..', import.meta.url)),
     build: {
       sourcemap: true,
       rollupOptions: {

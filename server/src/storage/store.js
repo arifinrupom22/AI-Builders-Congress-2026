@@ -221,19 +221,35 @@ export async function createStore({ dataDir, logger, adapters = null }) {
     /**
      * Bind a verified Firebase identity to an account row.
      *
-     * Lookup order matters for the five team accounts: an existing row is found
-     * by `firebaseUid` first, then by email, and keeps its own id. Keeping the
-     * id is what preserves that person's materials, quizzes and progress -
-     * only the sign-in provider changes. A brand-new account is keyed by the
-     * Firebase UID directly.
+     * An account row is found by `firebaseUid` only, and a brand-new account is
+     * keyed by the Firebase UID directly. There is no email-based adoption of an
+     * older row: every account belongs to the Firebase identity that signed up
+     * for it, so its materials, quizzes and progress are that identity's own.
      */
     async upsertFirebaseUser({ uid, email, displayName, emailVerified = false }) {
       if (typeof uid !== 'string' || uid.length === 0) throw AppError.badRequest('A verified Firebase uid is required.');
       const emailKey = String(email ?? '').trim().toLowerCase();
       let record = null;
+
+      // Fast path: this identity is already bound exactly as the token says, so
+      // there is nothing to write. Without it every authenticated API request
+      // would rewrite the account row (a whole-collection read plus a write).
+      // Accounts are keyed by the Firebase UID only. There is no email-based
+      // adoption of a pre-existing row: every account in this deployment is
+      // created by its own Firebase sign-up.
+      const known = await users.read();
+      const bound = known.find((u) => u.firebaseUid === uid) ?? null;
+      if (
+        bound &&
+        bound.firebaseUid === uid &&
+        bound.authProvider === 'firebase' &&
+        bound.emailVerified === (emailVerified === true) &&
+        bound.mustChangePassword !== true
+      ) {
+        return bound;
+      }
       await users.update((list) => {
         let idx = list.findIndex((u) => u.firebaseUid === uid);
-        if (idx === -1 && emailKey) idx = list.findIndex((u) => u.emailKey === emailKey);
         const stamp = nowIso();
         if (idx === -1) {
           record = {
@@ -327,7 +343,10 @@ export async function createStore({ dataDir, logger, adapters = null }) {
         for (let i = list.length - 1; i >= 0; i -= 1) {
           if (Date.parse(list[i].expiresAt) <= now) list.splice(i, 1);
         }
-        list.push({ tokenHash, csrfHash, userId, expiresAt, createdAt: nowIso() });
+        // `id` is required by the database driver, which keys every row on it:
+        // a row without an id is silently dropped, and the session would never
+        // be readable again. The JSON driver ignores the extra field.
+        list.push({ id: crypto.randomUUID(), tokenHash, csrfHash, userId, expiresAt, createdAt: nowIso() });
       });
     },
 
@@ -363,7 +382,8 @@ export async function createStore({ dataDir, logger, adapters = null }) {
         for (let i = list.length - 1; i >= 0; i -= 1) {
           if (list[i].userId === userId || Date.parse(list[i].expiresAt) <= Date.now()) list.splice(i, 1);
         }
-        list.push({ tokenHash, userId, expiresAt, createdAt: nowIso() });
+        // See createAuthSession: a reset row needs an id to be stored at all.
+        list.push({ id: crypto.randomUUID(), tokenHash, userId, expiresAt, createdAt: nowIso() });
       });
     },
 

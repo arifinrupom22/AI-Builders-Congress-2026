@@ -24,7 +24,7 @@ process.env.LEARNSPHERE_DATA_DIR ??= await fs.mkdtemp(path.join(os.tmpdir(), 'le
 // is pinned here instead of leaking the developer's deployment settings in.
 process.env.AUTH_MODE = 'local';
 // The team password is configuration, never source. Tests supply their own.
-process.env.TEAM_BOOTSTRAP_PASSWORD ??= 'harness-team-passphrase';
+
 
 const { config } = await import('../../src/config.js');
 const { createLogger } = await import('../../src/logger.js');
@@ -112,9 +112,8 @@ export async function createCore({ env = {} } = {}) {
     limits: { ...config.limits, ...(env.limits ?? {}) },
     upload: { ...config.upload, ...(env.upload ?? {}) },
     retrieval: { ...config.retrieval, ...(env.retrieval ?? {}) },
-    // Existing suites register throwaway addresses (alice@example.com) to test
-    // isolation, so the harness is open by default; the invitation policy has
-    // its own suite that asks for 'allowlist' explicitly.
+    // Registration is open by default, exactly as a fresh deployment is, so the
+    // isolation suites can register throwaway addresses (alice@example.com).
     auth: { ...config.auth, registrationPolicy: 'open', ...(env.auth ?? {}) },
     trustProxy: env.trustProxy ?? 0,
     ai: env.ai ?? config.ai,

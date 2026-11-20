@@ -193,3 +193,27 @@ test('account mode: an invalid session cookie is cleared and treated as signed o
   assert.equal(res.status, 401);
   assert.match(res.headers.getSetCookie().join('\n'), /Max-Age=0/);
 });
+
+test('firebase mode: a rejected ID token is ignored on the public session route but refused elsewhere', async (t) => {
+  const h = await createHarness({
+    env: {
+      auth: { mode: 'required' },
+      firebase: { projectId: 'test-project', configured: true },
+    },
+  });
+  t.after(() => h.close());
+
+  // A stale or revoked token must not stop the app from booting: /auth/session
+  // answers "signed out" instead of failing the whole page load.
+  const session = await fetch(`${h.api.baseUrl}/api/auth/session`, {
+    headers: { authorization: 'Bearer not-a-real-firebase-id-token' },
+  });
+  assert.equal(session.status, 200);
+  assert.equal((await session.json()).user, null);
+
+  const materials = await fetch(`${h.api.baseUrl}/api/materials`, {
+    headers: { authorization: 'Bearer not-a-real-firebase-id-token' },
+  });
+  assert.equal(materials.status, 401);
+  assert.equal((await materials.json()).error?.code, 'invalid_token');
+});

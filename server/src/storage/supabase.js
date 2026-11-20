@@ -27,7 +27,10 @@ function normaliseBaseUrl(raw) {
   try {
     const url = new URL(value);
     if (url.protocol !== 'https:' && url.protocol !== 'http:') return '';
-    return url.origin + url.pathname.replace(/\/+$/, '');
+    // A copied "REST endpoint" (`…/rest/v1`) is the same project. Accepting it
+    // here avoids building `…/rest/v1/rest/v1/records`, which answers every
+    // read with a 404.
+    return url.origin + url.pathname.replace(/\/+$/, '').replace(/\/rest\/v1$/, '');
   } catch {
     return '';
   }
@@ -164,7 +167,8 @@ const rowId = (row) => (row && typeof row.id === 'string' ? row.id : null);
  * their validation stay unchanged.
  */
 export function createSupabaseCollection({ client, collection, scope = null, logger = null }) {
-  const filters = () => (scope ? { collection: `eq.${collection}`, owner_id: `eq.${scope}` } : { collection: `eq.${collection}` });
+  // `client.selectAll` adds the `eq.` operator itself, so these are raw values.
+  const filters = () => (scope ? { collection, owner_id: scope } : { collection });
 
   async function readRows() {
     const rows = await client.selectAll('records', { filters: filters(), order: 'created_at.asc' });
@@ -247,7 +251,7 @@ export function createSupabaseBlobs({ client }) {
     async readPassages(materialId) {
       try {
         const rows = await client.selectAll('material_passages', {
-          filters: { material_id: `eq.${materialId}` },
+          filters: { material_id: materialId },
           order: 'position.asc',
         });
         return rows.map((row) => row.data ?? {});
