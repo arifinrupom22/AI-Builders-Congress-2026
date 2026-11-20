@@ -9,8 +9,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError, getLearnerId, setLearnerId as persistLearnerId, normaliseLearnerId } from '../lib/api.js';
 import {
+  firebaseCheckVerification,
   firebaseErrorMessage,
   firebaseRegister,
+  firebaseResendVerification,
   firebaseSignIn,
   firebaseSignOut,
   isFirebaseConfigured,
@@ -225,8 +227,24 @@ export function AppProvider({ children }) {
     [config?.auth?.mode, loadMaterials],
   );
 
+  /**
+   * The server decides which provider signs people in. A build that is missing
+   * its Firebase web configuration must not silently fall back to the password
+   * endpoints: on a Firebase deployment those are closed, and the session they
+   * used to create was never approved by email verification.
+   */
+  const assertIdentityProvider = useCallback(() => {
+    if (config?.auth?.provider === 'firebase' && !isFirebaseConfigured) {
+      throw new ApiError(
+        'This deployment signs in with Firebase, but this build is missing its Firebase web configuration. Rebuild the frontend with the VITE_FIREBASE_* values and redeploy.',
+        { code: 'firebase_config_missing' },
+      );
+    }
+  }, [config?.auth?.provider]);
+
   const signIn = useCallback(
     async (email, password) => {
+      assertIdentityProvider();
       // Firebase authenticates when it is configured; the server then verifies
       // the ID token and returns the account it belongs to.
       if (isFirebaseConfigured) {
@@ -237,9 +255,9 @@ export function AppProvider({ children }) {
           throw new ApiError(firebaseErrorMessage(err), { code: err?.code ?? 'firebase_error' });
         }
         if (!result.emailVerified) {
-          await firebaseSignOut().catch(() => {});
+          // firebaseSignIn has already dropped the unverified session.
           throw new ApiError(
-            'Verify your email address before signing in. Check your inbox for the verification link.',
+            'Verify your email address before signing in. Check your inbox for the verification link, then resend it if it never arrived.',
             { code: 'email_not_verified' },
           );
         }
@@ -253,33 +271,73 @@ export function AppProvider({ children }) {
       notify(`Signed in as ${session.user.email}.`, 'success');
       return session.user;
     },
-    [applySession, notify],
+    [applySession, assertIdentityProvider, notify],
   );
 
   const registerAccount = useCallback(
     async (email, password, displayName) => {
+      assertIdentityProvider();
       if (isFirebaseConfigured) {
+        let result;
         try {
-          await firebaseRegister(email, password, displayName);
+          result = await firebaseRegister(email, password, displayName);
         } catch (err) {
           throw new ApiError(firebaseErrorMessage(err), { code: err?.code ?? 'firebase_error' });
         }
+        // The account exists from this point on. A verification email that
+        // could not be sent is a resend problem, never a failed sign-up:
+        // reporting it as one leaves the person retrying a sign-up that can no
+        // longer succeed.
+        if (!result.verificationSent) {
+          notify(
+            `Account created, but the verification email could not be sent: ${result.verificationError ?? 'unknown error'}. Use “Resend verification email”.`,
+            'warning',
+            { timeoutMs: 16000 },
+          );
+        } else {
+          notify(
+            `Account created. A verification link was sent to ${email}. Verify it, then sign in.`,
+            'success',
+            { timeoutMs: 14000 },
+          );
+        }
         // No session yet: the address must be verified first, and the server
         // refuses a token whose email is unverified.
-        notify(
-          `Account created. A verification link was sent to ${email}. Verify it, then sign in.`,
-          'success',
-          { timeoutMs: 14000 },
-        );
-        return { needsVerification: true };
+        return {
+          needsVerification: true,
+          email: result.email ?? email,
+          verificationSent: result.verificationSent === true,
+          verificationError: result.verificationError ?? null,
+        };
       }
       const session = await api.register({ email, password, displayName });
       await applySession(session);
       notify('Account created. Your library is private to this account.', 'success');
       return session.user;
     },
-    [applySession, notify],
+    [applySession, assertIdentityProvider, notify],
   );
+
+  /**
+   * Send the verification link again. The password is required because the
+   * account holds no session until its address is verified.
+   */
+  const resendVerification = useCallback(async (email, password) => {
+    try {
+      return await firebaseResendVerification(email, password);
+    } catch (err) {
+      throw new ApiError(firebaseErrorMessage(err), { code: err?.code ?? 'firebase_error' });
+    }
+  }, []);
+
+  /** Re-read `emailVerified` after the person says they used the link. */
+  const checkVerification = useCallback(async (email, password) => {
+    try {
+      return await firebaseCheckVerification(email, password);
+    } catch (err) {
+      throw new ApiError(firebaseErrorMessage(err), { code: err?.code ?? 'firebase_error' });
+    }
+  }, []);
 
   const signOut = useCallback(async () => {
     if (isFirebaseConfigured) await firebaseSignOut().catch(() => {});
@@ -370,6 +428,8 @@ export function AppProvider({ children }) {
       auth,
       signIn,
       registerAccount,
+      resendVerification,
+      checkVerification,
       signOut,
       theme,
       setTheme,
@@ -413,6 +473,8 @@ export function AppProvider({ children }) {
       auth,
       signIn,
       registerAccount,
+      resendVerification,
+      checkVerification,
       signOut,
       theme,
       setTheme,

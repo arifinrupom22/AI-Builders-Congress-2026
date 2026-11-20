@@ -46,6 +46,19 @@ export function authRouter({ config, authService }) {
   // Local/demo deployments have no accounts. Say so instead of creating a
   // session that the identity layer would not use for authorization.
   function requireAccounts(req, res, next) {
+    // Firebase is the only identity provider on a deployment that can verify its
+    // tokens. These password endpoints must not be able to mint an account or a
+    // session there: such an identity is never verified by Firebase, which is
+    // exactly the bypass email verification exists to prevent.
+    if (config.firebase?.configured) {
+      return next(
+        new AppError('This deployment signs in with Firebase. Use the sign-in form on the site; password accounts are not available.', {
+          status: 403,
+          code: 'firebase_identity_required',
+          expose: true,
+        }),
+      );
+    }
     if (config.auth.mode === 'required') return next();
     return next(
       new AppError('Accounts are not enabled on this deployment.', {

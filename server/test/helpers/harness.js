@@ -23,6 +23,13 @@ process.env.LEARNSPHERE_DATA_DIR ??= await fs.mkdtemp(path.join(os.tmpdir(), 'le
 // their own identity mode per harness (`env.auth.mode`), so the process default
 // is pinned here instead of leaking the developer's deployment settings in.
 process.env.AUTH_MODE = 'local';
+// The real .env may point at a live Firebase project. When one is configured the
+// password endpoints are deliberately closed, which would make every
+// password-based suite depend on the developer's deployment. The identity suites
+// supply their own verifier instead, so Firebase starts switched off here.
+process.env.FIREBASE_PROJECT_ID = '';
+process.env.FIREBASE_CLIENT_EMAIL = '';
+process.env.FIREBASE_PRIVATE_KEY = '';
 // The team password is configuration, never source. Tests supply their own.
 
 

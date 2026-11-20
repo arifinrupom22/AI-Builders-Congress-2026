@@ -167,6 +167,12 @@ export function attachSession({ config, authService, store = null, firebase = nu
         // visitor on a public route.
       }
 
+      // Firebase is the only identity provider on a deployment that can verify
+      // its tokens. A cookie session left over from the retired password
+      // accounts must not authenticate here: Firebase never verified that
+      // address, and the account rows it points at are not Firebase-owned.
+      if (firebase?.configured) return next();
+
       if (token) {
         const session = await authService.sessionFromToken(token);
         if (session) {

@@ -73,12 +73,88 @@ function AuthError({ error, title }) {
   );
 }
 
+/**
+ * What an unverified account can do: send the link again, or re-read the
+ * verification state after the person used it from their inbox. Both need the
+ * password typed into the form, because an unverified account deliberately
+ * holds no session to act with.
+ */
+function VerificationActions({ email, password, tone = 'warning', title, body, showLoginLink = false }) {
+  const { t, resendVerification, checkVerification, notify } = useApp();
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState(null);
+  const [message, setMessage] = useState(null);
+  const canAct = Boolean(email) && Boolean(password) && !busy;
+
+  async function resend() {
+    setBusy('resend');
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await resendVerification(email, password);
+      if (result?.alreadyVerified) {
+        setMessage(t('auth.verifiedNow'));
+        notify(t('auth.verifiedNow'), 'success');
+      } else {
+        setMessage(t('auth.resent', { email }));
+      }
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function check() {
+    setBusy('check');
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await checkVerification(email, password);
+      setMessage(result?.emailVerified ? t('auth.verifiedNow') : t('auth.notVerifiedYet'));
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <>
+      <Alert tone={tone} title={title}>
+        <p>{body}</p>
+        <p className="muted-xs">{t('auth.verificationSpam')}</p>
+      </Alert>
+
+      <AuthError error={error} title={t('auth.verifyPendingTitle')} />
+      {message ? (
+        <Alert tone="info">
+          <p>{message}</p>
+        </Alert>
+      ) : null}
+
+      <Button variant="secondary" icon="mail" loading={busy === 'resend'} disabled={!canAct} onClick={resend}>
+        {busy === 'resend' ? t('auth.resending') : t('auth.resendVerification')}
+      </Button>
+      <Button variant="secondary" icon="check" loading={busy === 'check'} disabled={!canAct} onClick={check}>
+        {busy === 'check' ? t('auth.checking') : t('auth.checkVerified')}
+      </Button>
+      {showLoginLink ? (
+        <p className="muted-xs">
+          <a href="#/login">{t('auth.signIn')}</a>
+        </p>
+      ) : null}
+    </>
+  );
+}
+
 function LoginForm({ next }) {
   const { t, signIn } = useApp();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [unverified, setUnverified] = useState(false);
   const emailValid = EMAIL_RE.test(email.trim());
   const canSubmit = emailValid && password.length > 0 && !busy;
 
@@ -87,10 +163,13 @@ function LoginForm({ next }) {
     if (!canSubmit) return;
     setBusy(true);
     setError(null);
+    setUnverified(false);
     try {
       await signIn(email.trim(), password);
       navigate(next ?? '/dashboard');
     } catch (err) {
+      // An unverified address is not a failed password: offer the resend path.
+      setUnverified(err?.code === 'email_not_verified');
       setError(err);
     } finally {
       setBusy(false);
@@ -100,6 +179,15 @@ function LoginForm({ next }) {
   return (
     <form className="auth__form" onSubmit={submit} noValidate>
       <AuthError error={error} title={t('auth.loginFailed')} />
+
+      {unverified ? (
+        <VerificationActions
+          email={email.trim()}
+          password={password}
+          title={t('auth.verifyPendingTitle')}
+          body={t('auth.verifyPendingBody', { email: email.trim() })}
+        />
+      ) : null}
 
       <Field label={t('auth.email')} hint={t('auth.emailHint')} error={email && !emailValid ? t('auth.emailInvalid') : null}>
         {({ id, ...aria }) => (
@@ -154,6 +242,9 @@ function SignupForm({ next }) {
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  // Set once the account exists: the form is then replaced by the verification
+  // screen, which is the only thing this account may do until it is verified.
+  const [pending, setPending] = useState(null);
 
   const emailValid = EMAIL_RE.test(email.trim());
   const passwordValid = password.length >= MIN_PASSWORD;
@@ -168,14 +259,42 @@ function SignupForm({ next }) {
     try {
       const result = await registerAccount(email.trim(), password, displayName.trim() || undefined);
       // A Firebase sign-up has no session yet: the email must be verified
-      // first, so the form stays put and the toast explains the next step.
-      if (result?.needsVerification) return;
+      // first, so the form is replaced by the verification screen. A send that
+      // failed is shown there too, with the resend action.
+      if (result?.needsVerification) {
+        setPending({
+          email: result.email ?? email.trim(),
+          password,
+          sent: result.verificationSent !== false,
+          error: result.verificationError ?? null,
+        });
+        return;
+      }
       navigate(next ?? '/onboarding');
     } catch (err) {
       setError(err);
     } finally {
       setBusy(false);
     }
+  }
+
+  if (pending) {
+    return (
+      <div className="auth__form">
+        <VerificationActions
+          email={pending.email}
+          password={pending.password}
+          tone={pending.sent ? 'success' : 'warning'}
+          showLoginLink
+          title={pending.sent ? t('auth.verifyTitle') : t('auth.verifyFailedTitle')}
+          body={
+            pending.sent
+              ? t('auth.verifyBody', { email: pending.email })
+              : t('auth.verifyFailedBody', { email: pending.email, error: pending.error ?? '' })
+          }
+        />
+      </div>
+    );
   }
 
   return (

@@ -11,7 +11,7 @@
   <a href="https://ai-builders-congress-2026.onrender.com/api/health"><img alt="API" src="https://img.shields.io/badge/API-health-46a2f1?style=flat-square" /></a>
   <img alt="Node" src="https://img.shields.io/badge/node-%E2%89%A520.11-339933?style=flat-square&logo=node.js&logoColor=white" />
   <img alt="React" src="https://img.shields.io/badge/react-19-61dafb?style=flat-square&logo=react&logoColor=black" />
-  <img alt="Tests" src="https://img.shields.io/badge/tests-331_passing-2ea44f?style=flat-square" />
+  <img alt="Tests" src="https://img.shields.io/badge/tests-349_passing-2ea44f?style=flat-square" />
   <img alt="License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" />
 </p>
 
@@ -286,7 +286,7 @@ Supabase Auth is **not** used anywhere. Firebase is the only identity provider.
 | Mode | Intended use | Identity |
 | --- | --- | --- |
 | `local` (development default) | one student on one machine, demo, judging | a browser-asserted study profile (`X-Learner-Id`) |
-| `required` (production default) | any public or shared deployment | a verified Firebase ID token, or a legacy session cookie |
+| `required` (production default) | any public or shared deployment | a verified Firebase ID token (when Firebase is configured, a cookie session is ignored) |
 
 **`local` is not authentication.** The profile id is sanitised and every store query filters on it,
 but anyone who can reach the API can send any profile id. Settings and `/api/health` say this
@@ -307,6 +307,14 @@ build time, accounts are created and signed in through Firebase:
 - **Logout** — Firebase clears its session and the server also drops any legacy cookie session.
 - **Password reset** — the existing Forgot-password form calls Firebase's reset email when
   Firebase is configured. No reset token is ever shown on the page in that mode.
+- **Resend and re-check** — an unverified account cannot sign in, so the sign-in screen offers
+  "Resend verification email" and "I have verified my email". Both use the password already typed
+  in the form, act on a session that is dropped again immediately, and report Firebase's own error
+  when the send is refused (quota, rate limit, network).
+- **Password endpoints closed** — with `FIREBASE_PROJECT_ID` set, `/api/auth/register`, `/login` and
+  the password-reset routes answer `403 firebase_identity_required`. Otherwise they could mint a
+  session that no email verification ever approved, and an account Supabase would key to a
+  non-Firebase owner id.
 
 Server-side verification (`server/src/auth/firebase.js`) is dependency-free: it pins `alg` to
 RS256, selects Google's published certificate by `kid`, verifies the signature, checks `aud`,
@@ -327,8 +335,13 @@ password anywhere in the repository or the environment.
    calls Firebase Email/Password, sets the display name and asks Firebase to send a verification
    link. The new account is signed out immediately, so an unverified account never holds a session.
 2. **Verify** — the person follows the link in that email. Until they do, the server refuses their
-   token with `403 email_not_verified` and the UI explains that verification is pending instead of
-   showing a half-working account.
+   token with `403 email_not_verified` and the UI keeps them on the verification screen instead of
+   showing a half-working account. The same screen, and the sign-in error, offer **Resend
+   verification email** and **I have verified my email**.
+
+   If Firebase refuses the send (daily quota, rate limit, network), the account still exists and the
+   screen says so: it is reported as a resend problem, never as a failed sign-up, because retrying
+   the sign-up itself can only fail with `auth/email-already-in-use`.
 3. **Sign in** — Firebase authenticates, the browser sends the verified ID token as
    `Authorization: Bearer <idToken>`, and the server verifies it before touching any data. The
    account row is created on that first verified request and keyed by the Firebase UID, so it is
@@ -482,7 +495,7 @@ All routes are JSON and require a session in `required` mode (except the public 
 ## Testing
 
 ```bash
-npm test           # 331 tests
+npm test           # 349 tests (337 server + 12 web)
 npm run test:eval  # 10 grounded-answer evaluations
 npm run build      # production bundle
 ```
@@ -544,6 +557,10 @@ is in front, and give the service a persistent disk when using the JSON driver.
 4. **Authentication → Settings → Authorized domains** — add the Render host
    (`ai-builders-congress-2026.onrender.com`) and `localhost` for development.
 5. **Authentication → Templates** — review the verification and password-reset wording and sender.
+   The verification template must stay enabled. The app asks for the link to return to
+   `/#/login?verified=1`; that continue URL only works when the host is listed under
+   **Authorized domains** (step 4). If the project rejects it, the app retries without a continue
+   URL, so the email is still delivered and Firebase shows its own "email verified" page.
 6. **Project settings → Service accounts → Generate new private key** — copy `project_id` to
    `FIREBASE_PROJECT_ID` and keep the JSON file out of the repository.
 7. Nothing needs to be seeded under **Authentication → Users**: each person creates their own
@@ -571,7 +588,9 @@ is in front, and give the service a persistent disk when using the JSON driver.
 1. `GET /api/health` → `200` with `environment: production`, the provider chain and store counts.
 2. `GET /` → `200 text/html`; the referenced `/assets/*.js` and `.css` return `200`.
 3. Create an account → the verification email arrives → the link verifies it → signing in before
-   verifying returns `403 email_not_verified`.
+   verifying returns `403 email_not_verified`, and the sign-in screen offers **Resend verification
+   email**. If the mail never arrives, check the spam folder, the Firebase project's daily email
+   quota, and **Authentication → Templates**: the verification template must be enabled.
 4. Sign in verified, upload a document, ask a question, refresh the page: the material and the chat
    are still there.
 5. Sign out and sign in again: the same data is still there (this is what proves persistence).
